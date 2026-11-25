@@ -78,11 +78,31 @@ def read_config(path):
         return None
 
 
-def quoted_path(path):
+def quoted_path(path, *, powershell=False):
     text = path.as_posix()
-    if any(ch in text for ch in ('"', "%", "!", "\r", "\n")):
+    forbidden = '"%!\r\n'
+    if powershell:
+        forbidden += '$' + chr(96) + '\u201c\u201d\u201e'
+    if any(ch in text for ch in forbidden):
         raise InstallError("The installation path cannot be represented in a Windows command hook.")
     return '"' + text + '"'
+
+
+def windows_shell_token():
+    """An absolute command name parsed as an executable by cmd and PowerShell."""
+    token = WINDOWS_SHELL.as_posix()
+    safe = r"[A-Za-z]:/[A-Za-z0-9_./~-]+"
+    if re.fullmatch(safe, token):
+        return token
+    import ctypes
+    size = ctypes.windll.kernel32.GetShortPathNameW(str(WINDOWS_SHELL), None, 0)
+    if size:
+        buf = ctypes.create_unicode_buffer(size)
+        if ctypes.windll.kernel32.GetShortPathNameW(str(WINDOWS_SHELL), buf, size):
+            short = Path(buf.value)
+            if re.fullmatch(safe, short.as_posix()) and short.samefile(WINDOWS_SHELL):
+                return short.as_posix()
+    raise InstallError("The system PowerShell path needs a shell-safe absolute spelling.")
 
 
 def bash_path(path):
@@ -116,11 +136,11 @@ def installed_files(host, dest, python):
         files["hooks/python.sh"] = ("run_python() { " + shlex.quote(python.as_posix()) + ' "$@"; }\n').encode()
         return files, template["hooks"]
     if host == "codex" and ON_WINDOWS:
-        # The default Windows hook runner uses cmd /c. A builtin before the
-        # quoted executable makes cmd's first/last-quote rule unambiguous.
-        command = ("if 1==1 " + quoted_path(WINDOWS_SHELL) +
+        # A session can dispatch this declaration through cmd or PowerShell.
+        command = (windows_shell_token() +
                    " -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File " +
-                   quoted_path(dest / "scripts/codex_ps_publish_hook.ps1") + " -PythonPath " + quoted_path(python))
+                   quoted_path(dest / "scripts/codex_ps_publish_hook.ps1", powershell=True) +
+                   " -PythonPath " + quoted_path(python, powershell=True))
     elif host == "antigravity" and ON_WINDOWS:
         command = ("if 1==1 " + quoted_path(python) + " -I -X utf8 -B " +
                    quoted_path(dest / "scripts/antigravity_backtick_guard.py") + " 2>nul || exit /b 0")
@@ -303,6 +323,22 @@ def bash_executable():
     raise InstallError("Git Bash or Bash was not found.")
 
 
+def synthetic_reply(host, event, deny, cmd, cwd):
+    result = subprocess.run(cmd, input=json_bytes(event), capture_output=True, cwd=cwd, timeout=14)
+    if host == "claude":
+        return (result.returncode == (2 if deny else 0)
+                and (not deny or b"[backtick-check-hook]" in result.stderr))
+    if result.returncode != 0 or not deny:
+        return result.returncode == 0 and not result.stdout.strip()
+    body = read_object(result.stdout)
+    if host == "codex":
+        body = body.get("hookSpecificOutput", {})
+        decision, reason = body.get("permissionDecision"), body.get("permissionDecisionReason", "")
+    else:
+        decision, reason = body.get("decision"), body.get("reason", "")
+    return decision == "deny" and "[backtick-check-hook]" in reason
+
+
 def synthetic(host, entries, cwd):
     bash_probe = 'echo "sample ' + chr(96) + 'x' + chr(96) + '"'
     ps_probe = 'if ($false) { gh release create demo --notes "sample ' + chr(96) + 'x' + chr(96) + '" }'
@@ -313,10 +349,14 @@ def synthetic(host, entries, cwd):
                                                            else ["run_command", "manage_task"])
         line = group["hooks"][0]["command"]
         if claude or not ON_WINDOWS:
-            cmd = [bash_executable(), "-c", line]
+            runners = [
+                [bash_executable(), "-c", line],
+            ]
         else:
             # Pass the command as one raw argument after /c, as the host does.
-            cmd = '"' + str(WINDOWS_SHELL.parents[2] / "cmd.exe") + '" /d /s /c "' + line + '"'
+            runners = ['"' + str(WINDOWS_SHELL.parents[2] / "cmd.exe") + '" /C "' + line + '"']
+            if host == "codex":
+                runners.append([str(WINDOWS_SHELL), "-NoProfile", "-Command", line])
         allowed = "echo plain" if is_bash else 'Write-Output "a' + chr(96) + 'tb"'
         for tool in tools:
             for deny, sample in [(True, bash_probe if is_bash else ps_probe), (False, allowed)]:
@@ -325,21 +365,8 @@ def synthetic(host, entries, cwd):
                     event = {"hookEventName": "PreToolUse", "toolCall": {"name": tool, "args": args}}
                 else:
                     event = {"hook_event_name": "PreToolUse", "tool_name": tool, "tool_input": {"command": sample}}
-                result = subprocess.run(cmd, input=json_bytes(event), capture_output=True, cwd=cwd, timeout=14)
-                if claude:
-                    if result.returncode != (2 if deny else 0) or (deny and b"[backtick-check-hook]" not in result.stderr):
-                        return False
-                elif result.returncode != 0 or (not deny and result.stdout.strip()):
+                if not all(synthetic_reply(host, event, deny, cmd, cwd) for cmd in runners):
                     return False
-                elif deny:
-                    body = read_object(result.stdout)
-                    if host == "codex":
-                        body = body.get("hookSpecificOutput", {})
-                        decision, reason = body.get("permissionDecision"), body.get("permissionDecisionReason", "")
-                    else:
-                        decision, reason = body.get("decision"), body.get("reason", "")
-                    if decision != "deny" or "[backtick-check-hook]" not in reason:
-                        return False
     return True
 
 

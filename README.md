@@ -29,6 +29,8 @@ The installer uses user hook declarations for Codex and Antigravity. Codex's nat
 
 ## Probe your host
 
+For Windows Codex the installed command is checked with cmd and PowerShell dispatch. Spaces and non-ASCII characters can occur in the installed adapter and interpreter paths. The installer rejects names it cannot quote for both dispatchers, including paths containing percent, exclamation, dollar or backtick characters. Choose another user-controlled installation directory or interpreter if it reports that error.
+
 Send each line as its own shell tool call. In Windows PowerShell, use:
 
 ~~~powershell
