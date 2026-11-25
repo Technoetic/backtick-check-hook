@@ -97,7 +97,7 @@ class InstalledSelfTestTests(unittest.TestCase):
         self.assertIn("2 different guard commands are wired", problems[0])
 
     def test_hanging_hook_does_not_hold_the_session_start(self):
-        hang = "while :; do :; done  # bash_quote_guard.py"
+        hang = "exec sleep 4  # bash_quote_guard.py"
         started = time.perf_counter()
         problems = self.check(self.settings("hang.json", {"type": "command", "command": hang}), budget=1.5)
         self.assertLess(time.perf_counter() - started, 10)
