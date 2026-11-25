@@ -1,0 +1,38 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|Monitor",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "set +e; LC_ALL=C; IFS= read -r -d '' data; case \"$data\" in *'`'*|*u0060*) ;; *) exit 0 ;; esac; . \"${CLAUDE_PLUGIN_ROOT}/hooks/python.sh\" || exit 0; printf '%s' \"$data\" | run_python -I -X utf8 -B \"${CLAUDE_PLUGIN_ROOT}/scripts/bash_quote_guard.py\" --block-code=42; [ $? -eq 42 ] && exit 2; exit 0",
+            "timeout": 15
+          }
+        ]
+      },
+      {
+        "matcher": "PowerShell",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "set +e; LC_ALL=C; IFS= read -r -d '' data; case \"$data\" in *'`'*|*u0060*) ;; *) exit 0 ;; esac; . \"${CLAUDE_PLUGIN_ROOT}/hooks/python.sh\" || exit 0; printf '%s' \"$data\" | run_python -I -X utf8 -B \"${CLAUDE_PLUGIN_ROOT}/scripts/ps_publish_guard.py\" --block-code=42; [ $? -eq 42 ] && exit 2; exit 0",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact|fork",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "set +e; LC_ALL=C; . \"${CLAUDE_PLUGIN_ROOT}/hooks/python.sh\" && run_python -I -X utf8 -B \"${CLAUDE_PLUGIN_ROOT}/scripts/bash_quote_guard.py\" --self-test; rc=$?; [ $rc -eq 10 ] || echo \"[backtick-check-hook] Check the Bash hook setup (self-test code $rc).\"; exit 0",
+            "timeout": 20
+          }
+        ]
+      }
+    ]
+  }
+}

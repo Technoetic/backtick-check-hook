@@ -1,0 +1,9 @@
+{
+  "name": "backtick-check-hook",
+  "version": "0.1.0",
+  "description": "Check shell commands for backtick substitutions and publishing escapes before execution.",
+  "license": "MIT",
+  "author": {
+    "name": "Technoetic"
+  }
+}
