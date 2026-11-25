@@ -1,10 +1,13 @@
 """Read and execute the declarations written into a temporary home."""
 import base64
+from contextlib import redirect_stderr
 import hashlib
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
+import runpy
 import shutil
 import subprocess
 import sys
@@ -481,8 +484,7 @@ class InstallRoundtripTests(unittest.TestCase):
     def test_broken_json_is_preserved(self):
         h = IsolatedHome(self)
         for host, path in h.configs.items():
-            for invalid in (b"{invalid json", b'{"a":1e400}', b'{"a":Infinity}',
-                            b'{"a":' + b"[" * 2000 + b"]" * 2000 + b"}"):
+            for invalid in (b"{invalid json", b'{"a":1e400}', b'{"a":Infinity}'):
                 with self.subTest(host=host, length=len(invalid)):
                     path.parent.mkdir(parents=True, exist_ok=True)
                     path.write_bytes(invalid)
@@ -490,3 +492,33 @@ class InstallRoundtripTests(unittest.TestCase):
                     self.assertNotEqual(result.returncode, 0)
                     self.assertNotIn(b"Traceback", result.stderr)
                     self.assertEqual(path.read_bytes(), invalid)
+
+    def test_recursion_error_preserves_existing_configuration(self):
+        home = IsolatedHome(self)
+        path = home.configs["codex"]
+        path.parent.mkdir(parents=True, exist_ok=True)
+        original = b'{"foreign":{"id":1}}\n'
+        path.write_bytes(original)
+        main = runpy.run_path(str(REPO / "install.py"))["main"]
+        message = io.StringIO()
+        # JSON libraries reach their recursion limit at different depths.
+        with mock.patch.dict(os.environ, home.env, clear=True), \
+                mock.patch.object(sys, "argv", ["install.py", "install", "--host", "codex"]), \
+                mock.patch.object(json, "loads", side_effect=RecursionError), redirect_stderr(message):
+            self.assertEqual(main(), 1)
+        self.assertEqual(message.getvalue().strip(), "RecursionError")
+        self.assertEqual(path.read_bytes(), original)
+        self.assertFalse(home.package("codex").exists())
+
+    def test_supported_nested_json_survives_install_and_uninstall(self):
+        home = IsolatedHome(self)
+        path = home.configs["codex"]
+        path.parent.mkdir(parents=True, exist_ok=True)
+        value = 1
+        for _ in range(32):
+            value = [value]
+        original = {"foreign": value}
+        path.write_text(json.dumps(original), encoding="utf-8")
+        self.assertEqual(home.install("codex")["foreign"], value)
+        home.manage("uninstall", "codex")
+        self.assertEqual(home.config("codex"), original)
