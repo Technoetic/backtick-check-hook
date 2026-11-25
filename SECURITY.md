@@ -6,4 +6,8 @@ Install from a reviewed source tree using a trusted interpreter. Keep installed 
 
 A Codex trust hash applies to the hook declaration. Review changes to executable files as well. If setup or policy changes, run doctor, confirm the host version and send the harmless probes from the README in the actual session. Treat an unknown version or an unrecorded live probe as an open verification item. Consult the README for parsing limits, error behavior and recovery from a malformed shell hook.
 
-To report a problem to the maintainer, describe the host version, execution shell, operating system, and expected and observed results using synthetic text. Omit credentials and proprietary command contents.
+## Report a problem
+
+Use the **Issues** tab of this package's GitHub repository for reports that can be shared publicly. For sensitive reports, use **Security → Report a vulnerability** if the repository offers that option. If it is unavailable, open an issue requesting a private contact channel and withhold the sensitive details.
+
+Give the host version, shell, operating system, and expected and observed results. Use synthetic command text and omit credentials or proprietary content.

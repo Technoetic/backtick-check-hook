@@ -764,28 +764,36 @@ def _block_code(argv) -> int:
     return 2
 
 
-def _find_bash():
-    """Locate Bash for the self-test, skipping WSL and application aliases."""
+def _self_test_shell():
+    """Use the documented host shell for the outer declaration."""
     import os
-    import shutil
     from pathlib import Path
     if os.name != "nt":
-        return shutil.which("bash", path=os.defpath)
-    cands = [Path(root) / "Git" / "bin" / "bash.exe" for key in ("ProgramFiles", "ProgramW6432")
-             if (root := os.environ.get(key))]
-    sysroot = Path(os.environ["SystemRoot"]).resolve()
+        return "/bin/sh" if os.access("/bin/sh", os.X_OK) else None
+    sysroot = os.environ.get("SystemRoot") or os.environ.get("WINDIR")
     cwd = Path.cwd().resolve()
-    for directory in os.get_exec_path():
-        path = Path(directory)
-        if path.is_absolute() and not path.resolve().is_relative_to(cwd):
-            cands.append(path / "bash.exe")
+    if override := os.environ.get("CLAUDE_CODE_GIT_BASH_PATH"):
+        cands = [Path(override)]
+    else:
+        cands = [Path(root) / "Git/bin/bash.exe" for key in ("ProgramW6432", "ProgramFiles")
+                 if (root := os.environ.get(key))]
+        for directory in os.get_exec_path():
+            path = Path(directory)
+            if path.is_absolute() and not path.resolve().is_relative_to(cwd):
+                cands.append(path / "bash.exe")
+                if (path / "git.exe").is_file():
+                    cands.append(path.parent / "bin/bash.exe")
     for cand in cands:
-        if not cand.is_file():
+        if not cand.is_absolute() or not cand.is_file():
             continue
         path = cand.resolve()
-        if path.is_relative_to(sysroot) or "windowsapps" in (part.lower() for part in path.parts):
+        if (sysroot and path.is_relative_to(Path(sysroot).resolve())) or "windowsapps" in (part.lower() for part in path.parts):
             continue
-        return str(path)
+        git_root = path.parent.parent
+        if git_root.name.lower() == "usr":
+            git_root = git_root.parent
+        if path.name.lower() == "bash.exe" and path.parent.name.lower() == "bin" and (git_root / "cmd/git.exe").is_file():
+            return str(path)
     return None
 
 
@@ -804,16 +812,29 @@ def _matcher_covers(matcher: str, tool: str):
         return None
 
 
-def self_test(settings_paths=None, bash=None, env=None, budget: float = 8.0) -> list:
+def self_test(settings_paths=None, bash=None, env=None, budget: float = 8.0, installed=False) -> list:
     """설정에 걸린 이 검사기의 훅 명령을 실제로 돌려 본다. 문제를 적은 문장 목록을 돌려준다(빈 목록이면 정상).
     "note: "로 시작하는 문장은 알림이다: 그 문제가 있어도 두 도구는 동작하는 훅으로 덮여 있다.
-    기본값은 설치된 검사기에 딸린 hooks/hooks.json이다. budget은 훅 응답 대기 시간(초)이다."""
+    플러그인은 자체 선언, 사용자 설치본은 실제 등록과 설치 영수증을 대조한다."""
     import os
     import subprocess
     from pathlib import Path
     root = Path(__file__).resolve().parents[1]
+    owned_commands = None
     if settings_paths is None:
-        settings_paths = [str(root / "hooks" / "hooks.json")]
+        receipt = root / "state.json"
+        if installed or receipt.is_file():
+            try:
+                state = json.loads(receipt.read_bytes())
+                if state["host"] != "claude" or state["format"] != 1:
+                    raise ValueError()
+                owned_commands = {handler["command"] for group in state["entries"]["PreToolUse"]
+                                  for handler in group["hooks"]}
+            except (OSError, KeyError, TypeError, ValueError):
+                return ["cannot identify the installed Bash hook from its receipt"]
+            settings_paths = [str(root.parent / "settings.json")]
+        else:
+            settings_paths = [str(root / "hooks" / "hooks.json")]
     env = dict(os.environ if env is None else env)
     env["CLAUDE_PLUGIN_ROOT"] = root.as_posix()
     unreadable, entries, seen = [], [], set()
@@ -832,6 +853,8 @@ def self_test(settings_paths=None, bash=None, env=None, budget: float = 8.0) -> 
                 continue
             for hook in entry.get("hooks") or []:
                 command = hook.get("command") if isinstance(hook, dict) else None
+                if owned_commands is not None and (not isinstance(command, str) or command not in owned_commands):
+                    continue
                 if isinstance(command, str) and GUARD_FILE in command and hook.get("type") == "command":
                     key = (str(entry.get("matcher") or ""), command, bool(hook.get("async")))
                     if key not in seen:        # 같은 항목이 두 설정에 있으면 Claude Code도 한 번만 돌린다
@@ -839,9 +862,9 @@ def self_test(settings_paths=None, bash=None, env=None, budget: float = 8.0) -> 
                         entries.append({"path": path, "matcher": key[0], "hook": hook, "problems": []})
     if not entries:
         return unreadable + ["no PreToolUse hook runs %s (looked in: %s)" % (GUARD_FILE, ", ".join(settings_paths))]
-    bash = bash or _find_bash()
+    bash = bash or _self_test_shell()
     if not bash:
-        return unreadable + ["bash was not found, so the hook command could not be tried"]
+        return unreadable + ["the host shell was not found (Git Bash on Windows, /bin/sh on POSIX)"]
 
     def payload(tool, command):
         return json.dumps({"hook_event_name": "PreToolUse", "tool_name": tool,
@@ -916,6 +939,7 @@ def format_self_test(problems: list) -> str:
         lines = ["[bash-quote-guard] NOTICE: the Bash backtick guard works in this session, but its setup has a problem."]
     else:
         lines = ["[bash-quote-guard] WARNING: the Bash backtick guard is NOT fully protecting this session."]
+    lines[0] += " [backtick-check-hook]"
     lines += ["- " + (problem[6:] if problem.startswith("note: ") else problem) for problem in problems]
     if not notes_only:
         lines += ["Until this is fixed, do not put text that contains backticks inside double quotes or unquoted",
@@ -934,7 +958,7 @@ def main(argv=None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     if "--self-test" in argv:
         try:
-            problems = self_test()
+            problems = self_test(installed="--installed" in argv)
         except Exception as exc:
             problems = ["the self-test itself failed: %s" % exc.__class__.__name__]
         if not problems:

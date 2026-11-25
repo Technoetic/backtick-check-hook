@@ -4,6 +4,7 @@ import os
 import sys
 import time
 import unittest
+from unittest import mock
 
 from isolated_home import IsolatedHome
 from test_bash_quote_guard import BASH, g
@@ -54,6 +55,12 @@ class InstalledSelfTestTests(unittest.TestCase):
         problems = self.check(self.settings("none.json"))
         self.assertEqual(len(problems), 1)
         self.assertIn("no PreToolUse hook runs bash_quote_guard.py", problems[0])
+        self.assertIn("[backtick-check-hook]", g.format_self_test(problems))
+
+    @unittest.skipUnless(os.name == "nt", "Windows shell discovery")
+    def test_missing_windows_environment_reports_no_shell(self):
+        with mock.patch.dict(os.environ, {"PATH": ""}, clear=True):
+            self.assertIsNone(g._self_test_shell())
 
     def test_hook_that_cannot_find_the_guard_is_reported(self):
         missing = self.h.root.as_posix() + "/nowhere/bash_quote_guard.py"
@@ -86,6 +93,7 @@ class InstalledSelfTestTests(unittest.TestCase):
         self.assertTrue(problems[0].startswith("note: settings file is not valid JSON"), problems)
         text = g.format_self_test(problems)
         self.assertTrue(text.startswith("[bash-quote-guard] NOTICE: the Bash backtick guard works in this session"))
+        self.assertIn("[backtick-check-hook]", text)
         self.assertNotIn("note: ", text)
         self.assertIn("사용자에게 알리세요", text)
 
@@ -103,9 +111,9 @@ class InstalledSelfTestTests(unittest.TestCase):
         self.assertLess(time.perf_counter() - started, 10)
         self.assertTrue(any("did not finish within 1.5 seconds" in p for p in problems), problems)
 
-    def test_cli_distinguishes_failed_discovery_from_healthy_plugin(self):
+    def test_cli_distinguishes_missing_registration_from_healthy_installation(self):
         package = self.h.package("claude")
-        path = package / "hooks/hooks.json"
+        path = self.h.configs["claude"]
         working = path.read_bytes()
         path.write_bytes(b'{"hooks": {}}')
         cmd = [sys.executable, "-I", "-X", "utf8", "-B", str(package / "scripts/bash_quote_guard.py"), "--self-test"]

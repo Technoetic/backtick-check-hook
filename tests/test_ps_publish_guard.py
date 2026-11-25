@@ -7,6 +7,9 @@ import time
 import unittest
 from unittest import mock
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from timing_limits import timing_limit
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 SCRIPTS = os.path.join(os.path.dirname(HERE), "scripts")
 SCRIPT = os.path.join(SCRIPTS, "ps_publish_guard.py")
@@ -218,6 +221,20 @@ class DecisionTests(unittest.TestCase):
         self.assertTrue(g.find_problem(command).incomplete)
 
 
+class TimingLimitTests(unittest.TestCase):
+    def test_scale_is_one_by_default_and_accepts_positive_factors(self):
+        with mock.patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(timing_limit(0.5), 0.5)
+            os.environ["BACKTICK_TIMING_SCALE"] = "3"
+            self.assertEqual(timing_limit(2.0), 6.0)
+
+    def test_invalid_scale_does_not_disable_time_checks(self):
+        for value in ("", "bad", "nan", "inf", "-1", "0"):
+            with self.subTest(value=value), mock.patch.dict(os.environ, BACKTICK_TIMING_SCALE=value):
+                with self.assertRaisesRegex(ValueError, "finite positive"):
+                    timing_limit(1.0)
+
+
 class SpeedTests(unittest.TestCase):
     def test_option_runs_do_not_backtrack_exponentially(self):
         texts = ("git" + " --x" * 40 + " status",
@@ -230,7 +247,7 @@ class SpeedTests(unittest.TestCase):
                 start = time.perf_counter()
                 self.assertIsNone(g.PUBLISH.search(text))
                 self.assertIsNone(g.find_problem(text + " " + BT + "x"))
-                self.assertLess(time.perf_counter() - start, 0.1)
+                self.assertLess(time.perf_counter() - start, timing_limit(0.1))
 
     def test_crlf_line_continuations_do_not_backtrack(self):
         # A backtick + CRLF used to split two ways per continuation: 24 of them took 24 s, past the hook's 15 s.
@@ -238,14 +255,14 @@ class SpeedTests(unittest.TestCase):
                 + "gh release create v1 --notes \"use " + BT + "x" + BT + " now\"")
         start = time.perf_counter()
         self.assertIsNotNone(g.find_problem(text))
-        self.assertLess(time.perf_counter() - start, 0.5)
+        self.assertLess(time.perf_counter() - start, timing_limit(0.5))
 
     def test_git_inside_option_values_does_not_restart_the_search(self):
         # The search used to start again at every "git" inside --x=git, which grew with the square of the length.
         text = "git" + " --x=git" * 4000 + " status " + BT + "x"
         start = time.perf_counter()
         self.assertIsNone(g.find_problem(text))
-        self.assertLess(time.perf_counter() - start, 1.0)
+        self.assertLess(time.perf_counter() - start, timing_limit(1.0))
 
     def test_many_publish_words_without_text_stay_linear(self):
         # Each match used to scan the rest of the command: 16,000 'git tag;' took 13.5 s.
@@ -253,7 +270,7 @@ class SpeedTests(unittest.TestCase):
             with self.subTest(text=text[:12]):
                 start = time.perf_counter()
                 g.find_problem(text)
-                self.assertLess(time.perf_counter() - start, 2.0)
+                self.assertLess(time.perf_counter() - start, timing_limit(2.0))
 
     def test_git_value_options_holding_git_stay_bounded(self):
         # -c git, -C git: the search restarted at every inner git; 16,000 of them took over 40 s.
@@ -261,7 +278,7 @@ class SpeedTests(unittest.TestCase):
             with self.subTest(text=text[:12]):
                 start = time.perf_counter()
                 g.find_problem(text)
-                self.assertLess(time.perf_counter() - start, 2.0)
+                self.assertLess(time.perf_counter() - start, timing_limit(2.0))
 
     def test_long_match_is_shortened_in_the_message(self):
         command = "git" + " -c x" * 20 + ' commit -m "' + BT + 'x"'

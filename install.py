@@ -5,9 +5,11 @@ from contextlib import contextmanager
 import copy
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import re
+import runpy
 import shlex
 import shutil
 import subprocess
@@ -26,6 +28,8 @@ PAYLOADS = {
                     "scripts/ps_publish_guard.py" if ON_WINDOWS else "scripts/bash_quote_guard.py"),
 }
 MARKER = "state.json"
+MIN_PYTHON = (3, 11)
+PYTHON_REQUIREMENT = "Python 3.11 or newer is required for these hooks."
 
 
 class InstallError(Exception):
@@ -37,7 +41,7 @@ def digest(data):
 
 
 def json_bytes(obj):
-    return (json.dumps(obj, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
+    return (json.dumps(obj, indent=2, ensure_ascii=False, allow_nan=False) + "\n").encode("utf-8")
 
 
 def unique_keys(pairs):
@@ -49,8 +53,16 @@ def unique_keys(pairs):
     return result
 
 
+def finite_number(value):
+    number = float(value)
+    if not math.isfinite(number):
+        raise InstallError("Non-finite JSON number; inspect the configuration.")
+    return number
+
+
 def read_object(raw):
-    obj = json.loads(raw.decode("utf-8-sig"), object_pairs_hook=unique_keys)
+    obj = json.loads(raw.decode("utf-8-sig"), object_pairs_hook=unique_keys,
+                     parse_constant=finite_number, parse_float=finite_number)
     if not isinstance(obj, dict):
         raise InstallError("Expected a JSON object.")
     return obj
@@ -88,21 +100,23 @@ def quoted_path(path, *, powershell=False):
     return '"' + text + '"'
 
 
-def windows_shell_token():
-    """An absolute command name parsed as an executable by cmd and PowerShell."""
-    token = WINDOWS_SHELL.as_posix()
-    safe = r"[A-Za-z]:/[A-Za-z0-9_./~-]+"
+def unquoted_windows_path(path):
+    """Spell an existing absolute path without cmd metacharacters or quotes."""
+    token = path.as_posix()
+    safe = r"[A-Za-z]:/[\w./~-]+"
     if re.fullmatch(safe, token):
         return token
     import ctypes
-    size = ctypes.windll.kernel32.GetShortPathNameW(str(WINDOWS_SHELL), None, 0)
+    get_short = ctypes.windll.kernel32.GetShortPathNameW
+    size = get_short(str(path), None, 0)
     if size:
         buf = ctypes.create_unicode_buffer(size)
-        if ctypes.windll.kernel32.GetShortPathNameW(str(WINDOWS_SHELL), buf, size):
+        if 0 < get_short(str(path), buf, size) < size:
             short = Path(buf.value)
-            if re.fullmatch(safe, short.as_posix()) and short.samefile(WINDOWS_SHELL):
+            if re.fullmatch(safe, short.as_posix()) and short.samefile(path):
                 return short.as_posix()
-    raise InstallError("The system PowerShell path needs a shell-safe absolute spelling.")
+    raise InstallError("The Windows hook needs an unquoted absolute path. Use a directory "
+                       "without spaces or shell metacharacters, or with a usable Windows 8.3 name.")
 
 
 def bash_path(path):
@@ -129,21 +143,25 @@ def installed_files(host, dest, python):
         for groups in template["hooks"].values():
             for group in groups:
                 for handler in group["hooks"]:
-                    handler["command"] = re.sub(
-                        r'"\$\{CLAUDE_PLUGIN_ROOT\}/([^"]+)"',
-                        lambda match: bash_asset(dest, match[1]), handler["command"])
+                    left, right = handler["command"].split(" --discover ", 1)
+                    args = [re.sub(r'"\$\{CLAUDE_PLUGIN_ROOT\}/([^"]+)"',
+                                   lambda match: bash_asset(dest, match[1]), part) for part in (left, right)]
+                    handler["command"] = (" --python " + bash_asset(python.parent, python.name) + " ").join(args)
         files["hooks/hooks.json"] = json_bytes(template)
-        files["hooks/python.sh"] = ("run_python() { " + shlex.quote(python.as_posix()) + ' "$@"; }\n').encode()
+        files["hooks/python.sh"] = (ROOT / "hooks/python.sh").read_bytes()
         return files, template["hooks"]
     if host == "codex" and ON_WINDOWS:
         # A session can dispatch this declaration through cmd or PowerShell.
-        command = (windows_shell_token() +
+        command = (unquoted_windows_path(WINDOWS_SHELL) +
                    " -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File " +
                    quoted_path(dest / "scripts/codex_ps_publish_hook.ps1", powershell=True) +
                    " -PythonPath " + quoted_path(python, powershell=True))
     elif host == "antigravity" and ON_WINDOWS:
-        command = ("if 1==1 " + quoted_path(python) + " -I -X utf8 -B " +
-                   quoted_path(dest / "scripts/antigravity_backtick_guard.py") + " 2>nul || exit /b 0")
+        # The package is staged and renamed. Shorten its existing parent only,
+        # so reinstalling and checking the receipt yield the same declaration.
+        parent = unquoted_windows_path(dest.parent)
+        adapter = f"{parent}/{NAME}/scripts/antigravity_backtick_guard.py"
+        command = f"{unquoted_windows_path(python)} -I -X utf8 -B {adapter} 2>nul || exit /b 0"
     else:
         filename = "codex_posix_hook.py" if host == "codex" else "antigravity_backtick_guard.py"
         command = shlex.join([str(python), "-I", "-X", "utf8", "-B", str(dest / "scripts" / filename)])
@@ -234,9 +252,13 @@ def editing(directory):
 
 
 def change(host, action):
+    if action == "install" and sys.version_info[:2] < MIN_PYTHON:
+        raise InstallError(PYTHON_REQUIREMENT)
+    if action == "install" and host == "claude":
+        claude_shell()
     cfg = location(host)
     dest = cfg.parent / NAME
-    if action == "uninstall" and not dest.exists():
+    if action == "uninstall" and not cfg.parent.exists():
         return
     cfg.parent.mkdir(parents=True, exist_ok=True)
     with editing(cfg.parent):
@@ -244,30 +266,38 @@ def change(host, action):
         config = read_object(raw) if raw is not None else {}
         old = load_state(dest, host)
         if not old and action == "uninstall":
+            table = json.dumps(config.get("hooks", {}), ensure_ascii=False)
+            encoded = base64.b64encode(dest.as_posix().encode("utf-8")).decode("ascii")
+            normalized = table.replace("\\\\", "/").casefold()
+            refers_to_package = dest.as_posix().casefold() + "/" in normalized or encoded in table
+            if (host == "antigravity" and NAME in config) or (host != "antigravity" and refers_to_package):
+                raise InstallError(f"A hook registration remains in {cfg.name} without its installation "
+                                   "receipt. Inspect the declaration and remove the stale entry before reinstalling.")
             return
-        python = Path(sys.executable).resolve()
-        files, entries = installed_files(host, dest, python)
         key = NAME if host == "antigravity" else "hooks"
         if not old and host == "antigravity" and key in config:
             raise InstallError("The named hook table already belongs to another installation.")
         had_table = key in config
         table = registrations(config, host)
         if old:
-            check_files(dest, old, files)
-            remove_owned(table, old["entries"])
+            check_files(dest, old, old["files"])
+            if raw is not None or action == "install":
+                remove_owned(table, old["entries"])
         empty_before = old["events_before"] if old else list(table)
         had_table = old["table_before"] if old else had_table
         had_config = old["config_before"] if old else raw is not None
-        hashes = {name: digest(data) for name, data in files.items()}
-        new = {"format": 1, "host": host, "entries": entries, "files": hashes, "python": str(python),
-               "config_before": had_config, "table_before": had_table, "events_before": empty_before}
-        if old and "last_probe" in old:
-            new["last_probe"] = old["last_probe"]
         if action == "install":
+            python = Path(sys.executable).resolve() if ON_WINDOWS else Path(sys.executable).absolute()
+            files, entries = installed_files(host, dest, python)
+            hashes = {name: digest(data) for name, data in files.items()}
+            new = {"format": 1, "host": host, "entries": entries, "files": hashes, "python": str(python),
+                   "config_before": had_config, "table_before": had_table, "events_before": empty_before}
+            if old and "last_probe" in old:
+                new["last_probe"] = old["last_probe"]
             add_owned(table, entries)
             if new == old:
                 return
-        else:
+        elif raw is not None:
             for event in old["entries"]:
                 if not table[event] and event not in empty_before:
                     del table[event]
@@ -294,7 +324,7 @@ def change(host, action):
             try:
                 if action == "install":
                     os.replace(stage, dest)
-                if not config and not had_config and action == "uninstall":
+                if action == "uninstall" and (raw is None or (not config and not had_config)):
                     cfg.unlink(missing_ok=True)
                 else:
                     os.replace(replacement, cfg)
@@ -321,6 +351,19 @@ def bash_executable():
         if binary.is_file() and os.access(binary, os.X_OK):
             return str(binary)
     raise InstallError("Git Bash or Bash was not found.")
+
+
+def claude_shell():
+    if ON_WINDOWS:
+        # Isolated Python does not import modules from the package directory.
+        finder = runpy.run_path(str(ROOT / "scripts/bash_quote_guard.py"))["_self_test_shell"]
+        shell = finder()
+        if not shell:
+            raise InstallError("Claude Code hooks on Windows require Git Bash. Install Git for Windows first.")
+        return shell
+    if not all(os.access(path, os.X_OK) and Path(path).is_file() for path in ("/bin/sh", "/bin/bash")):
+        raise InstallError("Claude Code hooks require /bin/sh and /bin/bash.")
+    return "/bin/sh"
 
 
 def synthetic_reply(host, event, deny, cmd, cwd):
@@ -350,13 +393,15 @@ def synthetic(host, entries, cwd):
         line = group["hooks"][0]["command"]
         if claude or not ON_WINDOWS:
             runners = [
-                [bash_executable(), "-c", line],
+                [claude_shell() if claude else bash_executable(), "-c", line],
             ]
         else:
-            # Pass the command as one raw argument after /c, as the host does.
-            runners = ['"' + str(WINDOWS_SHELL.parents[2] / "cmd.exe") + '" /C "' + line + '"']
+            cmd = str(WINDOWS_SHELL.parents[2] / "cmd.exe")
+            runners = ['"' + cmd + '" /C "' + line + '"']
             if host == "codex":
                 runners.append([str(WINDOWS_SHELL), "-NoProfile", "-Command", line])
+            else:
+                runners.append([cmd, "/C", line])
         allowed = "echo plain" if is_bash else 'Write-Output "a' + chr(96) + 'tb"'
         for tool in tools:
             for deny, sample in [(True, bash_probe if is_bash else ps_probe), (False, allowed)]:
@@ -401,9 +446,20 @@ def examine(host, selected_version, record=False):
               ("on-disk" if version else "unknown"), "version_drift": None,
               "last_probe_version": None, "trust": "review /hooks in the running Codex" if host == "codex"
               else "not-applicable", "warnings": warnings}
+    if sys.version_info[:2] < MIN_PYTHON:
+        warnings.append(PYTHON_REQUIREMENT)
+        return result, 1
     if host == "codex":
         warnings.append("Trust review required after registration or a declaration change; check /hooks and probe the running session.")
-    if not ON_WINDOWS:
+    if host == "antigravity" and ON_WINDOWS:
+        warnings.append("The running host's cmd dispatch mode is unmeasured. Synthetic probes cover raw and argument-list dispatch.")
+    if host == "claude":
+        try:
+            claude_shell()
+        except InstallError as exc:
+            warnings.append(str(exc))
+            return result, 1
+    elif not ON_WINDOWS:
         warnings.append("POSIX host shell selection is unmeasured. Routing uses Bash.")
     if not result["host_version"]:
         warnings.append("Running host version unknown. Supply --host-version from that host.")
@@ -427,6 +483,10 @@ def examine(host, selected_version, record=False):
                                  capture_output=True, check=True, timeout=5)
         result["python"] = {"executable": display_path(python),
                             "version": (version.stdout or version.stderr).decode("ascii").strip()}
+        major_minor = re.match(r"Python (\d+)\.(\d+)", result["python"]["version"])
+        if not major_minor or tuple(map(int, major_minor.groups())) < MIN_PYTHON:
+            warnings.append("Registered interpreter: " + PYTHON_REQUIREMENT)
+            return result, 1
         result["synthetic"] = "passed" if synthetic(host, expected, dest) else "failed"
     except (OSError, ValueError, InstallError, subprocess.SubprocessError):
         warnings.append("Check hook registration, installed files and interpreter availability.")
@@ -480,7 +540,7 @@ def main():
             result, code = examine(args.host, args.host_version)
         print(json.dumps(result, ensure_ascii=True))
         return code
-    except (OSError, ValueError, KeyError, TypeError, InstallError, subprocess.SubprocessError) as exc:
+    except (OSError, ValueError, KeyError, TypeError, RecursionError, InstallError, subprocess.SubprocessError) as exc:
         # Configuration files may contain unrelated private settings.
         print(str(exc) if isinstance(exc, InstallError) else type(exc).__name__, file=sys.stderr)
         return 1

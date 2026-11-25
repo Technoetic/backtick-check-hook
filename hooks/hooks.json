@@ -6,8 +6,9 @@
         "hooks": [
           {
             "type": "command",
-            "command": "set +e; LC_ALL=C; IFS= read -r -d '' data; case \"$data\" in *'`'*|*u0060*) ;; *) exit 0 ;; esac; . \"${CLAUDE_PLUGIN_ROOT}/hooks/python.sh\" || exit 0; printf '%s' \"$data\" | run_python -I -X utf8 -B \"${CLAUDE_PLUGIN_ROOT}/scripts/bash_quote_guard.py\" --block-code=42; [ $? -eq 42 ] && exit 2; exit 0",
-            "timeout": 15
+            "command": "export LC_ALL=C; exec /bin/bash \"${CLAUDE_PLUGIN_ROOT}/hooks/python.sh\" --discover check \"${CLAUDE_PLUGIN_ROOT}/scripts/bash_quote_guard.py\"",
+            "timeout": 15,
+            "onFailure": "continue"
           }
         ]
       },
@@ -16,8 +17,9 @@
         "hooks": [
           {
             "type": "command",
-            "command": "set +e; LC_ALL=C; IFS= read -r -d '' data; case \"$data\" in *'`'*|*u0060*) ;; *) exit 0 ;; esac; . \"${CLAUDE_PLUGIN_ROOT}/hooks/python.sh\" || exit 0; printf '%s' \"$data\" | run_python -I -X utf8 -B \"${CLAUDE_PLUGIN_ROOT}/scripts/ps_publish_guard.py\" --block-code=42; [ $? -eq 42 ] && exit 2; exit 0",
-            "timeout": 15
+            "command": "export LC_ALL=C; exec /bin/bash \"${CLAUDE_PLUGIN_ROOT}/hooks/python.sh\" --discover check \"${CLAUDE_PLUGIN_ROOT}/scripts/ps_publish_guard.py\"",
+            "timeout": 15,
+            "onFailure": "continue"
           }
         ]
       }
@@ -28,7 +30,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "set +e; LC_ALL=C; . \"${CLAUDE_PLUGIN_ROOT}/hooks/python.sh\" && run_python -I -X utf8 -B \"${CLAUDE_PLUGIN_ROOT}/scripts/bash_quote_guard.py\" --self-test; rc=$?; [ $rc -eq 10 ] || echo \"[backtick-check-hook] Check the Bash hook setup (self-test code $rc).\"; exit 0",
+            "command": "set +e; export LC_ALL=C; /bin/bash \"${CLAUDE_PLUGIN_ROOT}/hooks/python.sh\" --discover session \"${CLAUDE_PLUGIN_ROOT}/scripts/bash_quote_guard.py\"; rc=$?; [ \"$rc\" -eq 10 ] || echo \"[backtick-check-hook] Check Bash, the launcher and Python 3.11+ (self-test code $rc).\"; exit 0",
             "timeout": 20
           }
         ]

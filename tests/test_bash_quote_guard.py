@@ -11,6 +11,9 @@ import tempfile
 import time
 import unittest
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from timing_limits import timing_limit
+
 SCRIPTS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "scripts")
 sys.path.insert(0, SCRIPTS_DIR)
 import bash_quote_guard as g  # noqa: E402
@@ -241,7 +244,7 @@ class PolicyTests(unittest.TestCase):
         command = ": " + "$(( " * 40 + "x" + " ) )" * 40 + ' "`date`"'
         started = time.perf_counter()
         found = g.find_violations(command)
-        self.assertLess(time.perf_counter() - started, 1.0)
+        self.assertLess(time.perf_counter() - started, timing_limit(1.0))
         self.assertEqual([v.rule for v in found], [A])
 
     def test_running_out_of_time_does_not_raise(self):
@@ -957,7 +960,12 @@ class RealBashTests(unittest.TestCase):
         그 경로로 넘긴 글이 fold_backslashes()의 결과와 같은지 본다."""
         payload = "\n".join(t for t, _r in MEASURED_FOLD if "\n" not in t)
         script = "while IFS= read -r line; do printf '%s\\n' \"$line\"; done <<'EOF'\n" + payload + "\nEOF"
-        p = subprocess.run([BASH, "-c", script], capture_output=True, timeout=60)
+        with tempfile.TemporaryDirectory(prefix="fold-check-") as tmp:
+            env = {k: v for k, v in os.environ.items()
+                   if k.upper() not in {"BASH_ENV", "ENV"} and not k.upper().startswith("BASH_FUNC_")}
+            env.update(HOME=tmp, USERPROFILE=tmp)
+            p = subprocess.run([BASH, "--noprofile", "--norc", "-c", script], capture_output=True,
+                               timeout=60, cwd=tmp, env=env)
         got = p.stdout.decode("utf-8", "replace").replace("\r\n", "\n")
         self.assertEqual(got, g.fold_backslashes(payload) + "\n")
 
