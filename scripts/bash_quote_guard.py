@@ -852,10 +852,6 @@ def _windows_probe_job(pid):
         _fields_ = [("basic", BasicLimits), ("io_counters", ctypes.c_uint64 * 6),
                     ("memory_limits_and_peaks", ctypes.c_size_t * 4)]
 
-    class Accounting(ctypes.Structure):
-        _fields_ = [("times", ctypes.c_int64 * 4), ("page_faults", w.DWORD), ("total", w.DWORD),
-                    ("active", w.DWORD), ("terminated", w.DWORD)]
-
     api = ctypes.WinDLL("kernel32", use_last_error=True)
     api.CreateJobObjectW.restype = api.OpenProcess.restype = w.HANDLE
     job = w.HANDLE(api.CreateJobObjectW(None, None))
@@ -878,21 +874,57 @@ def _windows_probe_job(pid):
         api.CloseHandle(job)
         raise
 
+    def member_ids(deadline):
+        capacity = 16
+        while time.monotonic() < deadline:
+            class ProcessList(ctypes.Structure):
+                _fields_ = [("assigned", w.DWORD), ("count", w.DWORD), ("ids", ctypes.c_size_t * capacity)]
+
+            members = ProcessList()
+            if api.QueryInformationJobObject(job, 3, ctypes.byref(members), ctypes.sizeof(members), None):
+                if members.count == members.assigned:
+                    return members.ids[:members.count]
+            elif ctypes.get_last_error() != 234:  # ERROR_MORE_DATA
+                raise ctypes.WinError(ctypes.get_last_error())
+            capacity = max(2 * capacity, members.assigned)
+        raise TimeoutError("the self-test job could not be enumerated")
+
     def stop_tree():
+        handles = []
         try:
+            deadline = time.monotonic() + 2
+            # Close admission before the snapshot: no member can launch another probe during teardown.
+            limits.basic.flags |= 0x0008  # JOB_OBJECT_LIMIT_ACTIVE_PROCESS
+            limits.basic.active_limit = 0
+            if not api.SetInformationJobObject(job, 9, ctypes.byref(limits), ctypes.sizeof(limits)):
+                raise ctypes.WinError(ctypes.get_last_error())
+            for pid in member_ids(deadline):
+                if time.monotonic() >= deadline:
+                    raise TimeoutError("the self-test process snapshot took too long")
+                handle = w.HANDLE(api.OpenProcess(0x101000, False, pid))  # SYNCHRONIZE | QUERY_LIMITED_INFORMATION
+                if not handle:
+                    if ctypes.get_last_error() == 87:  # The process already exited.
+                        continue
+                    raise ctypes.WinError(ctypes.get_last_error())
+                handles.append(handle)
+                member = w.BOOL()
+                if not api.IsProcessInJob(handle, job, ctypes.byref(member)):
+                    raise ctypes.WinError(ctypes.get_last_error())
+                if not member:  # The original PID exited before OpenProcess and was reused.
+                    api.CloseHandle(handles.pop())
             if not api.TerminateJobObject(job, 1):
                 raise ctypes.WinError(ctypes.get_last_error())
-            # Termination is asynchronous. Wait for file handles held by grandchildren to be released.
-            deadline = time.monotonic() + 2
-            info = Accounting()
-            while api.QueryInformationJobObject(job, 1, ctypes.byref(info), ctypes.sizeof(info), None):
-                if not info.active:
-                    return
-                if time.monotonic() >= deadline:
-                    raise TimeoutError("the self-test job did not terminate")
-                time.sleep(0.01)
-            raise ctypes.WinError(ctypes.get_last_error())
+            # A zero job active count can precede both process exit and file-lock release.
+            for handle in handles:
+                remaining_ms = max(0, int((deadline - time.monotonic()) * 1000))
+                wait = api.WaitForSingleObject(handle, remaining_ms)
+                if wait == 258:  # WAIT_TIMEOUT
+                    raise TimeoutError("a self-test process did not terminate")
+                if wait != 0:
+                    raise ctypes.WinError(ctypes.get_last_error())
         finally:
+            for handle in handles:
+                api.CloseHandle(handle)
             api.CloseHandle(job)
 
     return stop_tree

@@ -3,7 +3,6 @@ import json
 import os
 from pathlib import Path
 import shlex
-import socket
 import sys
 import time
 import unittest
@@ -119,15 +118,23 @@ class InstalledSelfTestTests(unittest.TestCase):
     def test_timeout_releases_descendants_and_limits_concurrent_probes(self):
         sleeper = self.h.root / "sleeper.py"
         sleeper.write_text(
-            """import os, socket, subprocess, sys, time
+            """import os, subprocess, sys, time
 from pathlib import Path
 root = Path(__file__).parent
 if len(sys.argv) == 1:
     subprocess.Popen([sys.executable, '-I', '-B', __file__, 'child'])
 else:
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock.bind(('127.0.0.1', 0))
-    (root / (str(os.getpid()) + '.port')).write_text(str(sock.getsockname()[1]))
+    name = str(os.getpid())
+    held = (root / (name + '.lock')).open('w+b', buffering=0)
+    held.write(b'x')
+    held.seek(0)
+    if os.name == 'nt':
+        import msvcrt
+        msvcrt.locking(held.fileno(), msvcrt.LK_NBLCK, 1)
+    else:
+        import fcntl
+        fcntl.flock(held, fcntl.LOCK_EX)
+    (root / (name + '.ready')).mkdir()
 end = time.monotonic() + 20
 while not (root / 'stop').exists() and time.monotonic() < end:
     time.sleep(.03)
@@ -137,12 +144,19 @@ while not (root / 'stop').exists() and time.monotonic() < end:
         try:
             problems = self.check(self.settings("descendants.json", hook), budget=3)
             self.assertTrue(any("did not finish within 3 seconds" in p for p in problems), problems)
-            ports = [int(p.read_text()) for p in self.h.root.glob("*.port")]
-            self.assertGreater(len(ports), 0, "the descendant must be running before the timeout")
-            for port in ports:
-                with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as check:
-                    check.bind(("127.0.0.1", port))
-            self.assertLessEqual(len(ports), 2, "queued probes must not start after the deadline")
+            ready = list(self.h.root.glob("*.ready"))
+            self.assertGreater(len(ready), 0, "a descendant must hold its own lock before timeout")
+            self.assertLessEqual(len(ready), 2, "queued probes must not start after the deadline")
+            for marker in ready:
+                path = marker.with_suffix(".lock")
+                with path.open("r+b", buffering=0) as check:
+                    if os.name == "nt":
+                        import msvcrt
+                        msvcrt.locking(check.fileno(), msvcrt.LK_NBLCK, 1)
+                    else:
+                        import fcntl
+                        fcntl.flock(check, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                path.unlink()
         finally:
             (self.h.root / "stop").touch()
 
