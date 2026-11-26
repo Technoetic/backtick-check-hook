@@ -74,15 +74,15 @@ The table covers version 0.1.0 in live host sessions. Local adapter tests use sy
 
 **Why Python 3.11 is required.** Python 3.10 lacks possessive regex quantifiers. Its fallback uses ordinary quantifiers, so the PowerShell checker's runtime can grow exponentially with repeated CRLF continuations. A Python 3.10.11 measurement took 3.3 seconds for 20 continuations and 12.3 seconds for 22. If the checker reaches the hook's timeout the command can proceed unchecked. Use Python 3.11 or newer.
 
-Installed hooks were measured in a temporary home on Windows 11 Insider build 26300.9974, with Python 3.12.10, Git Bash 5.3.15, Windows PowerShell 5.1.26100.9818 and cmd from that Windows build. The measurement ran on 2026-11-26 (KST) at commit `20fdc68016e9`. Its hook, launcher, checker and installer files are byte-identical to this version. The table gives median launch-to-exit times in milliseconds over seven runs after one warm-up. Live session latency for version 0.1.0 is unmeasured.
+Installed hooks were measured in a temporary home on Windows 11 Insider build 26300.9974, with Python 3.12.10, Git Bash 5.3.15, Windows PowerShell 5.1.26100.9818 and cmd from that Windows build. The measurement ran on 2026-11-26 (KST) at commit `c850100731ec`. Its hook, launcher, checker and installer files are byte-identical to this version. The table gives median launch-to-exit times in milliseconds over seven runs after one warm-up. Live session latency for version 0.1.0 is unmeasured.
 
 | Installed hook | Empty shell | Plain event | Denied event |
 |---|---:|---:|---:|
-| Claude Code (Git Bash) | 292.1 | 317.0 | 878.9 |
-| Codex (cmd / Windows PowerShell) | 53.5 | 422.1 | 857.2 |
-| Antigravity (cmd / Python) | 53.0 | 134.4 | 210.6 |
+| Claude Code (Git Bash) | 329.8 | 301.9 | 885.6 |
+| Codex (cmd / Windows PowerShell) | 51.6 | 419.6 | 848.0 |
+| Antigravity (cmd / Python) | 55.2 | 132.0 | 206.8 |
 
-One direct Claude self-test took 3253.2 ms (exit 10). One call through the installed SessionStart hook took 3591.7 ms (exit 0). Codex and Antigravity have no SessionStart registration.
+One direct Claude self-test took 3129.1 ms (exit 10). One call through the installed SessionStart hook took 2967.9 ms (exit 0). Codex and Antigravity have no SessionStart registration.
 
 ## Remove, troubleshoot and test
 
