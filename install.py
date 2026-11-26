@@ -100,7 +100,8 @@ def quoted_path(path, *, powershell=False):
     return '"' + text + '"'
 
 
-def unquoted_windows_path(path):
+def unquoted_windows_path(path, advice="The Windows hook needs an unquoted absolute path. Use a directory "
+                          "without spaces or shell metacharacters, or with a usable Windows 8.3 name."):
     """Spell an existing absolute path without cmd metacharacters or quotes."""
     token = path.as_posix()
     safe = r"[A-Za-z]:/[\w./~-]+"
@@ -115,8 +116,7 @@ def unquoted_windows_path(path):
             short = Path(buf.value)
             if re.fullmatch(safe, short.as_posix()) and short.samefile(path):
                 return short.as_posix()
-    raise InstallError("The Windows hook needs an unquoted absolute path. Use a directory "
-                       "without spaces or shell metacharacters, or with a usable Windows 8.3 name.")
+    raise InstallError(advice)
 
 
 def bash_path(path):
@@ -126,14 +126,37 @@ def bash_path(path):
     return '"' + text + '"'
 
 
-def bash_asset(dest, name):
-    text = dest.as_posix()
-    if ON_WINDOWS and (not text.isascii() or any(ch in text for ch in (chr(96), '"', '$', '\n', '\r'))):
-        # MSYS can transcode a -c argument before Bash sees LC_ALL=C. Carry
-        # the pinned directory as ASCII and recover the UTF-8 bytes in Bash.
-        encoded = base64.b64encode(text.encode("utf-8")).decode("ascii")
-        return '"$(printf %s ' + encoded + ' | /usr/bin/base64 -d)/' + name + '"'
-    return bash_path(dest / name)
+def claude_command(template, dest, python):
+    # MSYS may transcode a -c argument before Bash sees LC_ALL=C. Pin the
+    # original UTF-8 bytes once, without launching a decoder in Git Bash.
+    special = {}
+    for key, path in (("hook_root", dest), ("hook_python", python)):
+        text = path.as_posix()
+        if ON_WINDOWS and (not text.isascii() or any(ch in text for ch in (chr(96), '"', '$', '\n', '\r'))):
+            special[key] = text.encode("utf-8")
+    root = r'"\$\{CLAUDE_PLUGIN_ROOT\}/([^"]+)"'
+    interpreter = '"$hook_python"' if "hook_python" in special else bash_path(python)
+    def asset(m):
+        return '"${hook_root}/' + m[1] + '"' if "hook_root" in special else bash_path(dest / m[1])
+    command = (" --python " + interpreter + " ").join(re.sub(root, asset, part)
+                                                     for part in template.split(" --discover ", 1))
+    if not special:
+        return command
+    # A quoted space is backslash-space in the C locale. Take its first
+    # character for printf %b's octal escapes, keeping the declaration itself
+    # free of literal backslashes across Windows command-line dispatchers.
+    bash = ["printf -v esc %q ' '", "esc=${esc%?}"]
+    posix = []
+    literal = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 /:.-_"
+    for key, data in special.items():
+        octets = "".join(chr(b) if b in literal
+                         else "${esc}0" + format(b, "03o") for b in data)
+        bash.append(f'printf -v {key} %b "{octets}"')
+        b64 = base64.b64encode(data).decode("ascii")
+        posix.append(f'{key}="$(printf %s {b64} | /usr/bin/base64 -d)"')
+    setup = ('if [ -n "${BASH_VERSION-}" ] && command -p -v shopt >/dev/null 2>&1; then '
+             + "; ".join(bash) + "; else " + "; ".join(posix) + "; fi; ")
+    return command.replace("export LC_ALL=C; ", "export LC_ALL=C; " + setup, 1)
 
 
 def installed_files(host, dest, python):
@@ -143,10 +166,7 @@ def installed_files(host, dest, python):
         for groups in template["hooks"].values():
             for group in groups:
                 for handler in group["hooks"]:
-                    left, right = handler["command"].split(" --discover ", 1)
-                    args = [re.sub(r'"\$\{CLAUDE_PLUGIN_ROOT\}/([^"]+)"',
-                                   lambda match: bash_asset(dest, match[1]), part) for part in (left, right)]
-                    handler["command"] = (" --python " + bash_asset(python.parent, python.name) + " ").join(args)
+                    handler["command"] = claude_command(handler["command"], dest, python)
         files["hooks/hooks.json"] = json_bytes(template)
         files["hooks/python.sh"] = (ROOT / "hooks/python.sh").read_bytes()
         return files, template["hooks"]
@@ -157,11 +177,18 @@ def installed_files(host, dest, python):
                    quoted_path(dest / "scripts/codex_ps_publish_hook.ps1", powershell=True) +
                    " -PythonPath " + quoted_path(python, powershell=True))
     elif host == "antigravity" and ON_WINDOWS:
-        # The package is staged and renamed. Shorten its existing parent only,
-        # so reinstalling and checking the receipt yield the same declaration.
-        parent = unquoted_windows_path(dest.parent)
-        adapter = f"{parent}/{NAME}/scripts/antigravity_backtick_guard.py"
-        command = f"{unquoted_windows_path(python)} -I -X utf8 -B {adapter} 2>nul || exit /b 0"
+        interpreter = unquoted_windows_path(
+            python, "The Python interpreter path requires an unquoted spelling. Run this installer with "
+                    "Python 3.11+ at a path without spaces or shell metacharacters, or with a usable 8.3 name.")
+        # Only the profile needs to exist. The fixed config and package names
+        # can be appended before any part of the installation is created.
+        home = Path.home()
+        profile = unquoted_windows_path(
+            home, "Antigravity uses a fixed settings directory under the Windows profile. Ask an administrator "
+                  "for a usable 8.3 name for the profile path, or use an account whose profile path has no "
+                  "spaces or shell metacharacters.")
+        adapter = (Path(profile) / dest.relative_to(home) / "scripts/antigravity_backtick_guard.py").as_posix()
+        command = f"{interpreter} -I -X utf8 -B {adapter} 2>nul || exit /b 0"
     else:
         filename = "codex_posix_hook.py" if host == "codex" else "antigravity_backtick_guard.py"
         command = shlex.join([str(python), "-I", "-X", "utf8", "-B", str(dest / "scripts" / filename)])
@@ -258,7 +285,10 @@ def change(host, action):
         claude_shell()
     cfg = location(host)
     dest = cfg.parent / NAME
-    if action == "uninstall" and not cfg.parent.exists():
+    if action == "install":
+        python = Path(sys.executable).resolve() if ON_WINDOWS else Path(sys.executable).absolute()
+        files, entries = installed_files(host, dest, python)
+    elif not cfg.parent.exists():
         return
     cfg.parent.mkdir(parents=True, exist_ok=True)
     with editing(cfg.parent):
@@ -287,8 +317,6 @@ def change(host, action):
         had_table = old["table_before"] if old else had_table
         had_config = old["config_before"] if old else raw is not None
         if action == "install":
-            python = Path(sys.executable).resolve() if ON_WINDOWS else Path(sys.executable).absolute()
-            files, entries = installed_files(host, dest, python)
             hashes = {name: digest(data) for name, data in files.items()}
             new = {"format": 1, "host": host, "entries": entries, "files": hashes, "python": str(python),
                    "config_before": had_config, "table_before": had_table, "events_before": empty_before}
@@ -444,13 +472,14 @@ def examine(host, selected_version, record=False):
     result = {"host": host, "configuration": display_path(cfg), "synthetic": "not-run", "host_probe": "unrecorded",
               "host_version": version, "version_source": "operator-running-host" if selected_version else
               ("on-disk" if version else "unknown"), "version_drift": None,
-              "last_probe_version": None, "trust": "review /hooks in the running Codex" if host == "codex"
+              "last_probe_version": None, "trust": "review /hooks in the running CLI or Review hooks in the desktop app" if host == "codex"
               else "not-applicable", "warnings": warnings}
     if sys.version_info[:2] < MIN_PYTHON:
         warnings.append(PYTHON_REQUIREMENT)
         return result, 1
     if host == "codex":
-        warnings.append("Trust review required after registration or a declaration change; check /hooks and probe the running session.")
+        warnings.append("Trust review required after registration or a declaration change. Open /hooks in the CLI "
+                        "or Settings > Hooks in the desktop app, then probe the running session.")
     if host == "antigravity" and ON_WINDOWS:
         warnings.append("The running host's cmd dispatch mode is unmeasured. Synthetic probes cover raw and argument-list dispatch.")
     if host == "claude":

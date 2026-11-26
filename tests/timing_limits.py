@@ -1,5 +1,4 @@
 """Scale only the elapsed-time assertions in the test suite."""
-import math
 import os
 
 
@@ -9,6 +8,6 @@ def timing_limit(seconds):
         multiplier = float(setting)
     except ValueError:
         multiplier = 0
-    if not math.isfinite(multiplier) or multiplier <= 0:
-        raise ValueError("BACKTICK_TIMING_SCALE must be a finite positive number")
+    if not 0 < multiplier <= 10:
+        raise ValueError("BACKTICK_TIMING_SCALE must be a finite positive number no greater than 10")
     return seconds * multiplier

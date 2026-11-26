@@ -26,10 +26,12 @@ def worker(codepage):
         home = Path(tmp) / "test home"
         home.mkdir()
         for name, sub in (("HOME", ""), ("USERPROFILE", ""), ("APPDATA", "roaming"),
-                          ("LOCALAPPDATA", "local"), ("TEMP", "tmp"), ("TMP", "tmp"),
+                          ("LOCALAPPDATA", "local"), ("TEMP", "tmp"), ("TMP", "tmp"), ("TMPDIR", "tmp"),
+                          ("XDG_CONFIG_HOME", ".config"), ("XDG_DATA_HOME", ".local/share"),
+                          ("XDG_CACHE_HOME", ".cache"), ("XDG_STATE_HOME", ".local/state"),
                           ("CODEX_HOME", ".codex"), ("CLAUDE_CONFIG_DIR", ".claude")):
             target = home / sub
-            target.mkdir(exist_ok=True)
+            target.mkdir(parents=True, exist_ok=True)
             env[name] = str(target)
         env["PATH"] = str(Path(sys.executable).parent) + os.pathsep + env.get("PATH", "")
         env["PYTHONIOENCODING"] = "utf-8"

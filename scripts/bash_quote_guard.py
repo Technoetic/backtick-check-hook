@@ -812,12 +812,137 @@ def _matcher_covers(matcher: str, tool: str):
         return None
 
 
-def self_test(settings_paths=None, bash=None, env=None, budget: float = 8.0, installed=False) -> list:
+SELF_TEST_BUDGET = 15.0  # The outer SessionStart hook allows 20 seconds, including cleanup.
+SELF_TEST_WORKERS = 2
+
+
+def _self_test_probes():
+    """Run inside the parent's job/process group. Read the request before starting any children."""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    import subprocess
+    shell, probes = json.load(sys.stdin.buffer)
+
+    def run(probe):
+        hook, tool, command = probe
+        event = {"hook_event_name": "PreToolUse", "tool_name": tool, "tool_input": {"command": command}}
+        try:
+            return subprocess.run([shell, "-c", hook], input=json.dumps(event).encode("utf-8"),
+                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode
+        except (OSError, ValueError) as exc:
+            return type(exc).__name__
+
+    with ThreadPoolExecutor(max_workers=SELF_TEST_WORKERS) as pool:
+        indices = {pool.submit(run, probe): i for i, probe in enumerate(probes)}
+        for future in as_completed(indices):
+            print(json.dumps([indices[future], future.result()]), flush=True)
+
+
+def _windows_probe_job(pid):
+    """Attach the waiting worker before its first probe. Closing the job also kills orphaned descendants."""
+    import ctypes
+    from ctypes import wintypes as w
+
+    class BasicLimits(ctypes.Structure):
+        _fields_ = [("process_time", ctypes.c_int64), ("job_time", ctypes.c_int64), ("flags", w.DWORD),
+                    ("min_working_set", ctypes.c_size_t), ("max_working_set", ctypes.c_size_t),
+                    ("active_limit", w.DWORD), ("affinity", ctypes.c_size_t),
+                    ("priority", w.DWORD), ("scheduling", w.DWORD)]
+
+    class ExtendedLimits(ctypes.Structure):
+        _fields_ = [("basic", BasicLimits), ("io_counters", ctypes.c_uint64 * 6),
+                    ("memory_limits_and_peaks", ctypes.c_size_t * 4)]
+
+    class Accounting(ctypes.Structure):
+        _fields_ = [("times", ctypes.c_int64 * 4), ("page_faults", w.DWORD), ("total", w.DWORD),
+                    ("active", w.DWORD), ("terminated", w.DWORD)]
+
+    api = ctypes.WinDLL("kernel32", use_last_error=True)
+    api.CreateJobObjectW.restype = api.OpenProcess.restype = w.HANDLE
+    job = w.HANDLE(api.CreateJobObjectW(None, None))
+    if not job:
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        limits = ExtendedLimits()
+        limits.basic.flags = 0x2000  # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+        if not api.SetInformationJobObject(job, 9, ctypes.byref(limits), ctypes.sizeof(limits)):
+            raise ctypes.WinError(ctypes.get_last_error())
+        process = w.HANDLE(api.OpenProcess(0x0101, False, pid))  # PROCESS_SET_QUOTA | PROCESS_TERMINATE
+        if not process:
+            raise ctypes.WinError(ctypes.get_last_error())
+        try:
+            if not api.AssignProcessToJobObject(job, process):
+                raise ctypes.WinError(ctypes.get_last_error())
+        finally:
+            api.CloseHandle(process)
+    except BaseException:
+        api.CloseHandle(job)
+        raise
+
+    def stop_tree():
+        try:
+            if not api.TerminateJobObject(job, 1):
+                raise ctypes.WinError(ctypes.get_last_error())
+            # Termination is asynchronous. Wait for file handles held by grandchildren to be released.
+            deadline = time.monotonic() + 2
+            info = Accounting()
+            while api.QueryInformationJobObject(job, 1, ctypes.byref(info), ctypes.sizeof(info), None):
+                if not info.active:
+                    return
+                if time.monotonic() >= deadline:
+                    raise TimeoutError("the self-test job did not terminate")
+                time.sleep(0.01)
+            raise ctypes.WinError(ctypes.get_last_error())
+        finally:
+            api.CloseHandle(job)
+
+    return stop_tree
+
+
+def _run_self_test_probes(bash, probes, env, budget):
+    import os
+    import signal
+    import subprocess
+
+    deadline = time.monotonic() + budget
+    request = json.dumps([os.fsdecode(bash), probes]).encode("utf-8")
+    worker = [sys.executable, "-I", "-S", "-X", "utf8", "-B", __file__, "--self-test-probes"]
+    with subprocess.Popen(worker, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                          stderr=subprocess.DEVNULL, start_new_session=os.name != "nt") as proc:
+        stop_job = None
+        try:
+            if os.name == "nt":
+                stop_job = _windows_probe_job(proc.pid)
+            output, _ = proc.communicate(request, timeout=max(0, deadline - time.monotonic()))
+        except subprocess.TimeoutExpired:
+            output = None
+        finally:
+            if stop_job:
+                stop_job()
+            elif proc.returncode is None:
+                if os.name == "nt":  # Job setup failed before the worker was given its input.
+                    proc.kill()
+                else:
+                    try:
+                        os.killpg(proc.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+        if output is None:
+            output, _ = proc.communicate(timeout=2)
+            unfinished = None  # Timeout; keep results already flushed by completed probes.
+        else:
+            unfinished = "worker exit %s" % proc.returncode
+    results = [unfinished] * len(probes)
+    for record in output.split(b"\n")[:-1]:
+        index, result = json.loads(record)
+        results[index] = result
+    return results
+
+
+def self_test(settings_paths=None, bash=None, env=None, budget: float = SELF_TEST_BUDGET, installed=False) -> list:
     """설정에 걸린 이 검사기의 훅 명령을 실제로 돌려 본다. 문제를 적은 문장 목록을 돌려준다(빈 목록이면 정상).
     "note: "로 시작하는 문장은 알림이다: 그 문제가 있어도 두 도구는 동작하는 훅으로 덮여 있다.
     플러그인은 자체 선언, 사용자 설치본은 실제 등록과 설치 영수증을 대조한다."""
     import os
-    import subprocess
     from pathlib import Path
     root = Path(__file__).resolve().parents[1]
     owned_commands = None
@@ -866,13 +991,9 @@ def self_test(settings_paths=None, bash=None, env=None, budget: float = 8.0, ins
     if not bash:
         return unreadable + ["the host shell was not found (Git Bash on Windows, /bin/sh on POSIX)"]
 
-    def payload(tool, command):
-        return json.dumps({"hook_event_name": "PreToolUse", "tool_name": tool,
-                           "tool_input": {"command": command}}).encode("utf-8")
-
     live = 'echo "self-test ' + "`" + "true" + "`" + ' text"'          # 훅에 글로만 넘긴다. 실행하지 않는다
     dead = "echo 'self-test " + "`" + "not run" + "`" + " text'"
-    started = []                           # 세션 시작을 늦추지 않게 한꺼번에 띄우고 차례로 거둔다
+    cases, probes = [], []
     for entry in entries:
         covers = {tool: _matcher_covers(entry["matcher"], tool) for tool in TOOL_NAMES}
         entry["covers"] = [tool for tool in TOOL_NAMES if covers[tool]]
@@ -884,28 +1005,18 @@ def self_test(settings_paths=None, bash=None, env=None, budget: float = 8.0, ins
         first = entry["covers"][0] if entry["covers"] else TOOL_NAMES[0]
         tries = [(tool, live, 2) for tool in entry["covers"]] + [(first, dead, 0), (first, "echo plain text", 0)]
         for tool, command, want in tries:
-            try:
-                proc = subprocess.Popen([bash, "-c", entry["hook"]["command"]], stdin=subprocess.PIPE,
-                                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env)
-                proc.stdin.write(payload(tool, command))
-                proc.stdin.close()
-                started.append((entry, tool, want, proc, None))
-            except Exception as exc:
-                started.append((entry, tool, want, None, exc.__class__.__name__))
-    deadline = time.monotonic() + budget   # 기다리는 시간은 모두 합쳐 budget을 넘지 않는다
-    for entry, tool, want, proc, failure in started:
+            cases.append((entry, tool, want))
+            probes.append((entry["hook"]["command"], tool, command))
+    try:
+        results = _run_self_test_probes(bash, probes, env, budget)
+    except (OSError, ValueError) as exc:
+        results = [type(exc).__name__] * len(probes)
+    for (entry, tool, want), got in zip(cases, results):
         where = "the hook in %s" % entry["path"]
-        if proc is None:
-            entry["problems"].append("%s could not be run (%s)" % (where, failure))
+        if isinstance(got, str):
+            entry["problems"].append("%s could not be run (%s)" % (where, got))
             continue
-        try:
-            got = proc.wait(timeout=max(0.05, deadline - time.monotonic()))
-        except Exception:
-            proc.kill()
-            try:
-                proc.wait(timeout=2)
-            except Exception:
-                pass
+        if got is None:
             entry["problems"].append("%s did not finish within %g seconds" % (where, budget))
             continue
         if got == want:
@@ -944,7 +1055,7 @@ def format_self_test(problems: list) -> str:
     if not notes_only:
         lines += ["Until this is fixed, do not put text that contains backticks inside double quotes or unquoted",
                   "here-documents: write it to a file with a file-writing tool."]
-    lines.append("See the installation and self-test sections in README.md.")
+    lines.append("See 'Install and check' and 'Probe your host' in README.md.")
     if notes_only:
         lines.append("[한국어] Bash 백틱 검사 훅은 동작하지만 설정에 위 문제가 있습니다. 이 내용을 사용자에게 알리세요.")
     else:
@@ -956,6 +1067,9 @@ def format_self_test(problems: list) -> str:
 
 def main(argv=None) -> int:
     argv = sys.argv[1:] if argv is None else argv
+    if argv == ["--self-test-probes"]:
+        _self_test_probes()
+        return 0
     if "--self-test" in argv:
         try:
             problems = self_test(installed="--installed" in argv)

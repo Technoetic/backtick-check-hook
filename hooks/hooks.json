@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "export LC_ALL=C; exec /bin/bash \"${CLAUDE_PLUGIN_ROOT}/hooks/python.sh\" --discover check \"${CLAUDE_PLUGIN_ROOT}/scripts/bash_quote_guard.py\"",
+            "command": "export LC_ALL=C; set -- \"${CLAUDE_PLUGIN_ROOT}/hooks/python.sh\" --discover check \"${CLAUDE_PLUGIN_ROOT}/scripts/bash_quote_guard.py\"; if [ -n \"${BASH_VERSION-}\" ] && command -p -v shopt >/dev/null 2>&1; then . \"$@\"; else exec /bin/bash \"$@\"; fi",
             "timeout": 15,
             "onFailure": "continue"
           }
@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "export LC_ALL=C; exec /bin/bash \"${CLAUDE_PLUGIN_ROOT}/hooks/python.sh\" --discover check \"${CLAUDE_PLUGIN_ROOT}/scripts/ps_publish_guard.py\"",
+            "command": "export LC_ALL=C; set -- \"${CLAUDE_PLUGIN_ROOT}/hooks/python.sh\" --discover check \"${CLAUDE_PLUGIN_ROOT}/scripts/ps_publish_guard.py\"; if [ -n \"${BASH_VERSION-}\" ] && command -p -v shopt >/dev/null 2>&1; then . \"$@\"; else exec /bin/bash \"$@\"; fi",
             "timeout": 15,
             "onFailure": "continue"
           }
@@ -30,7 +30,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "set +e; export LC_ALL=C; /bin/bash \"${CLAUDE_PLUGIN_ROOT}/hooks/python.sh\" --discover session \"${CLAUDE_PLUGIN_ROOT}/scripts/bash_quote_guard.py\"; rc=$?; [ \"$rc\" -eq 10 ] || echo \"[backtick-check-hook] Check Bash, the launcher and Python 3.11+ (self-test code $rc).\"; exit 0",
+            "command": "set +e; export LC_ALL=C; set -- \"${CLAUDE_PLUGIN_ROOT}/hooks/python.sh\" --discover session \"${CLAUDE_PLUGIN_ROOT}/scripts/bash_quote_guard.py\"; if [ ! -r \"$1\" ]; then rc=127; elif [ -n \"${BASH_VERSION-}\" ] && command -p -v shopt >/dev/null 2>&1; then . \"$@\"; rc=$?; else /bin/bash \"$@\"; rc=$?; fi; [ \"$rc\" -eq 10 ] || echo \"[backtick-check-hook] Check Bash, the launcher and Python 3.11+ (self-test code $rc).\"; exit 0",
             "timeout": 20
           }
         ]

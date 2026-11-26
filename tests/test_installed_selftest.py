@@ -1,6 +1,9 @@
 """Run self-check diagnostics against hooks inside isolated test installations."""
 import json
 import os
+from pathlib import Path
+import shlex
+import socket
 import sys
 import time
 import unittest
@@ -8,6 +11,7 @@ from unittest import mock
 
 from isolated_home import IsolatedHome
 from test_bash_quote_guard import BASH, g
+from timing_limits import timing_limit
 
 
 @unittest.skipUnless(BASH, "no usable bash (Git Bash) on this machine")
@@ -31,6 +35,7 @@ class InstalledSelfTestTests(unittest.TestCase):
         return path
 
     def check(self, *paths, **kwargs):
+        kwargs.setdefault("budget", timing_limit(g.SELF_TEST_BUDGET))
         return g.self_test(list(paths), bash=BASH, env=self.env, **kwargs)
 
     def test_working_hook_reports_nothing(self):
@@ -101,7 +106,7 @@ class InstalledSelfTestTests(unittest.TestCase):
         one = self.settings("one.json", {"type": "command", "command": self.good})
         two = self.settings("two.json", {"type": "command", "command": self.good + " "})
         problems = self.check(one, two)
-        self.assertEqual(len(problems), 1)
+        self.assertEqual(len(problems), 1, problems)
         self.assertIn("2 different guard commands are wired", problems[0])
 
     def test_hanging_hook_does_not_hold_the_session_start(self):
@@ -110,6 +115,36 @@ class InstalledSelfTestTests(unittest.TestCase):
         problems = self.check(self.settings("hang.json", {"type": "command", "command": hang}), budget=1.5)
         self.assertLess(time.perf_counter() - started, 10)
         self.assertTrue(any("did not finish within 1.5 seconds" in p for p in problems), problems)
+
+    def test_timeout_releases_descendants_and_limits_concurrent_probes(self):
+        sleeper = self.h.root / "sleeper.py"
+        sleeper.write_text(
+            """import os, socket, subprocess, sys, time
+from pathlib import Path
+root = Path(__file__).parent
+if len(sys.argv) == 1:
+    subprocess.Popen([sys.executable, '-I', '-B', __file__, 'child'])
+else:
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.bind(('127.0.0.1', 0))
+    (root / (str(os.getpid()) + '.port')).write_text(str(sock.getsockname()[1]))
+end = time.monotonic() + 20
+while not (root / 'stop').exists() and time.monotonic() < end:
+    time.sleep(.03)
+""", encoding="utf-8")
+        command = shlex.join([Path(sys.executable).as_posix(), "-I", "-B", sleeper.as_posix()])
+        hook = {"type": "command", "command": command + "; exit 0  # bash_quote_guard.py"}
+        try:
+            problems = self.check(self.settings("descendants.json", hook), budget=3)
+            self.assertTrue(any("did not finish within 3 seconds" in p for p in problems), problems)
+            ports = [int(p.read_text()) for p in self.h.root.glob("*.port")]
+            self.assertGreater(len(ports), 0, "the descendant must be running before the timeout")
+            for port in ports:
+                with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as check:
+                    check.bind(("127.0.0.1", port))
+            self.assertLessEqual(len(ports), 2, "queued probes must not start after the deadline")
+        finally:
+            (self.h.root / "stop").touch()
 
     def test_cli_distinguishes_missing_registration_from_healthy_installation(self):
         package = self.h.package("claude")

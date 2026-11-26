@@ -1,4 +1,4 @@
-# Bash is selected explicitly by the hook declaration, including under POSIX sh.
+# The declaration sources this file in Bash or runs it with /bin/bash from sh.
 set +e
 LC_ALL=C
 python=()
@@ -42,24 +42,40 @@ find_python() {
 }
 
 run_guard() {
-    if [ "${#python[@]}" -eq 0 ]; then find_python || return 127; fi
-    "${python[@]}" -I -X utf8 -B -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else 78)' || return $?
-    "${python[@]}" -I -X utf8 -B "$guard" "$@"
+    if [ "${#python[@]}" -gt 0 ]; then
+        # The installer already checked this interpreter.
+        "${python[@]}" -I -X utf8 -B "$guard" "$@"
+        return $?
+    fi
+    find_python || return 127
+    "${python[@]}" -I -X utf8 -B -c '
+import sys
+if sys.version_info < (3, 11):
+    sys.exit(78)
+import runpy
+sys.argv = sys.argv[1:]
+runpy.run_path(sys.argv[0], run_name="__main__")
+' "$guard" "$@"
+}
+
+run_session() {
+    local rc
+    if [ "${#python[@]}" -gt 0 ]; then
+        run_guard --self-test --installed
+    else
+        run_guard --self-test
+    fi
+    rc=$?
+    if [ "$rc" -eq 78 ]; then
+        echo '[backtick-check-hook] Python 3.11 or later is required to run the checks.'
+    fi
+    return "$rc"
 }
 
 if [ "$mode" = check ]; then
     printf '%s' "$data" | run_guard --block-code=42
     [ $? -eq 42 ] && exit 2
     exit 0
-fi
-
-if [ "${#python[@]}" -gt 0 ]; then
-    run_guard --self-test --installed
 else
-    run_guard --self-test
+    run_session
 fi
-rc=$?
-if [ "$rc" -eq 78 ]; then
-    echo '[backtick-check-hook] Python 3.11 or later is required to run the checks.'
-fi
-exit "$rc"

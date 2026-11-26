@@ -6,7 +6,7 @@ import importlib.util
 import io
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import runpy
 import shutil
 import subprocess
@@ -56,7 +56,6 @@ class InstalledClaudeTests(unittest.TestCase):
         self.assertEqual(set(rule), {"type", "command", "timeout", "onFailure"})
         self.assertEqual(rule["onFailure"], "continue")
         self.assertEqual((rule["type"], rule["timeout"]), ("command", 15))
-        self.assertTrue(line.startswith("export LC_ALL=C; exec /bin/bash "))
         self.assertNotIn("\\", line)
         launcher = (self.package / "hooks/python.sh").read_text(encoding="utf-8")
         self.assertIn("*'`'*|*u0060*)", launcher)
@@ -214,6 +213,63 @@ class InstalledClaudeTests(unittest.TestCase):
             proc = self.h.run([str(dash), "-c", start], env=env)
             self.assertEqual((proc.returncode, proc.stdout), (0, b""), proc.stderr)
 
+    def test_each_shell_reuses_bash_and_invokes_python_once(self):
+        # A non-exported variable is visible when sourced and disappears on exec.
+        launcher = self.package / "hooks/python.sh"
+        launcher.write_text('echo "${outer_shell-new}" >> shell-trace\n' +
+                            launcher.read_text(encoding="utf-8"), encoding="utf-8", newline="\n")
+        shim = self.h.root / "한글 $bin [%]" / ("python.exe" if os.name == "nt" else "python3")
+        shim.parent.mkdir()
+        shim.write_text("#!/bin/sh\necho python >> python-trace\n"
+                        'case "$*" in *--self-test*) exit 10 ;; *--block-code=42*) exit 42 ;; esac\n',
+                        encoding="ascii", newline="\n")
+        shim.chmod(0o755)
+        # A POSIX sh can inherit an exported Bash version from its parent.
+        env = dict(self.h.env, CLAUDE_PLUGIN_ROOT=self.package.as_posix(), BASH_VERSION="inherited",
+                   PATH=str(shim.parent) + os.pathsep + self.h.env["PATH"])
+        native = json.loads((REPO / "hooks/hooks.json").read_bytes())
+        installer = runpy.run_path(str(REPO / "install.py"))
+        _, installed_hooks = installer["installed_files"]("claude", self.package, shim)
+        if os.name == "nt":
+            bindir = Path(BASH).parent
+            dash = bindir / "dash.exe"
+            if not dash.is_file():
+                dash = bindir.parent / "usr/bin/dash.exe"
+            shells = [(str(dash), "new"), (str(bindir / "sh.exe"), "outer"), (BASH, "outer")]
+        else:
+            shells = [(shutil.which("dash") or "/bin/sh", None), (BASH, "outer")]
+        for shell, marker in shells:
+            for config in (native, {"hooks": installed_hooks}):
+                for event, matcher, line, expected, python_calls in [
+                    ("PreToolUse", "Bash|Monitor", "echo plain", 0, 0),
+                    ("PreToolUse", "Bash|Monitor", BASH_CASE, 2, 1),
+                    ("SessionStart", START_MATCHER, "", 0, 1),
+                ]:
+                    with self.subTest(shell=shell, native=config is native, event=event, code=expected):
+                        shell_trace = self.h.cwd / "shell-trace"
+                        python_trace = self.h.cwd / "python-trace"
+                        shell_trace.write_bytes(b"")
+                        python_trace.write_bytes(b"")
+                        cmd = declaration(config, "claude", event, matcher)["command"]
+                        proc = self.h.run([shell, "-c", "set -x; outer_shell=outer; " + cmd],
+                                          encoded_command("Bash", line), env=env)
+                        self.assertEqual((proc.returncode, proc.stdout), (expected, b""), proc.stderr)
+                        if marker is not None:
+                            self.assertEqual(shell_trace.read_text().splitlines(), [marker])
+                        if marker == "outer" and config is not native:
+                            self.assertNotIn(b"/usr/bin/base64 -d", proc.stderr)
+                        self.assertEqual(python_trace.read_text().splitlines(), ["python"] * python_calls)
+
+    def test_claude_pinned_path_may_contain_discovery_option(self):
+        root = PurePosixPath("/a --discover folder")
+        python = PurePosixPath("/b --discover folder/python")
+        make = runpy.run_path(str(REPO / "install.py"))["claude_command"]
+        source = json.loads((REPO / "hooks/hooks.json").read_bytes())
+        command = declaration(source, "claude", "PreToolUse", "Bash|Monitor")["command"]
+        installed = make(command, root, python)
+        self.assertIn(f'"{root.as_posix()}/hooks/python.sh" --python "{python.as_posix()}"', installed)
+        self.assertIn(f'"{root.as_posix()}/scripts/bash_quote_guard.py"', installed)
+
     @unittest.skipUnless(os.name == "nt", "Windows hook shell fallback")
     def test_claude_install_and_doctor_require_git_bash(self):
         h = IsolatedHome(self)
@@ -318,11 +374,20 @@ class InstalledAgyTests(unittest.TestCase):
         installer = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(installer)
         with mock.patch.dict(os.environ, h.env, clear=True), \
+                mock.patch.object(sys, "executable", h.home.anchor + "Python/python.exe"), \
                 mock.patch("ctypes.windll.kernel32.GetShortPathNameW", return_value=0):
-            with self.assertRaisesRegex(installer.InstallError, "8.3"):
+            with self.assertRaisesRegex(installer.InstallError, r"profile.*8\.3"):
                 installer.change("antigravity", "install")
-        self.assertFalse(h.configs["antigravity"].exists())
-        self.assertFalse(h.package("antigravity").exists())
+        self.assertFalse((h.home / ".gemini").exists())
+
+        # An existing settings directory belongs to the user, even on refusal.
+        config_dir = h.configs["antigravity"].parent
+        config_dir.mkdir(parents=True)
+        with mock.patch.dict(os.environ, h.env, clear=True), \
+                mock.patch.object(sys, "executable", str(h.home / "missing Python" / "python.exe")):
+            with self.assertRaisesRegex(installer.InstallError, r"interpreter.*8\.3"):
+                installer.change("antigravity", "install")
+        self.assertEqual(list(config_dir.iterdir()), [])
 
     @unittest.skipUnless(os.name == "nt", "validates cmd.exe command parsing")
     def test_configured_cmd_hook_blocks_allows_and_survives_missing_adapter(self):

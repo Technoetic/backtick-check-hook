@@ -227,9 +227,11 @@ class TimingLimitTests(unittest.TestCase):
             self.assertEqual(timing_limit(0.5), 0.5)
             os.environ["BACKTICK_TIMING_SCALE"] = "3"
             self.assertEqual(timing_limit(2.0), 6.0)
+            os.environ["BACKTICK_TIMING_SCALE"] = "10"
+            self.assertEqual(timing_limit(2.0), 20.0)
 
     def test_invalid_scale_does_not_disable_time_checks(self):
-        for value in ("", "bad", "nan", "inf", "-1", "0"):
+        for value in ("", "bad", "nan", "inf", "-1", "0", "10.01", "1e9", "1e308"):
             with self.subTest(value=value), mock.patch.dict(os.environ, BACKTICK_TIMING_SCALE=value):
                 with self.assertRaisesRegex(ValueError, "finite positive"):
                     timing_limit(1.0)

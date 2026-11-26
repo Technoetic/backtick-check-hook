@@ -33,6 +33,7 @@ class IsolatedHome:
             "TEMP": temp_dir, "TMP": temp_dir, "TMPDIR": temp_dir,
             "CODEX_HOME": self.home / ".codex", "CLAUDE_CONFIG_DIR": self.home / ".claude",
             "XDG_CONFIG_HOME": self.home / ".config", "XDG_DATA_HOME": self.home / ".local/share",
+            "XDG_CACHE_HOME": self.home / ".cache", "XDG_STATE_HOME": self.home / ".local/state",
         }.items():
             directory.mkdir(parents=True, exist_ok=True)
             self.env[key] = str(directory)
@@ -49,8 +50,10 @@ class IsolatedHome:
                               cwd=self.cwd, env=self.env if env is None else env)
 
     def manage(self, verb, host, *options, check=True):
+        # A diagnostic command runs several independently time-limited probes.
+        timeout = 135 if verb in ("doctor", "record-probe") else 45
         proc = self.run([sys.executable, "-I", "-X", "utf8", "-B", str(INSTALLER), verb,
-                         "--host", host, *options])
+                         "--host", host, *options], timeout=timeout)
         if check:
             self.test.assertEqual(proc.returncode, 0, (proc.stdout, proc.stderr))
         return proc
