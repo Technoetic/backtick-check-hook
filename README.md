@@ -1,91 +1,148 @@
-# Backtick Check Hook
+# 백틱 검사 훅
 
-A backtick can change a Markdown example as a coding assistant passes it through a shell. This hook checks for Bash command substitution and for active PowerShell backticks in Git or GitHub CLI commands that write text. A PowerShell tab escape in an ordinary output command passes.
+<div align="center">
+  <a href="https://github.com/Technoetic/backtick-check-hook/releases/tag/v0.1.0"><img src="docs/art/release.svg" alt="릴리스 v0.1.0"></a>
+  <a href="#install-and-check"><img src="docs/art/python.svg" alt="Python 3.11 이상"></a>
+  <a href="LICENSE"><img src="docs/art/license.svg" alt="MIT 라이선스"></a>
+</div>
 
-[한국어 안내](README.ko.md) · [Security and trust](SECURITY.md) · [Changes](CHANGELOG.md)
+![셸이 백틱을 읽기 전에](docs/art/hero.svg)
 
-## Install and check
+셸로 릴리스 노트를 작성하면 마크다운에 쓴 코드 이름이 사라질 수 있습니다. Bash는 큰따옴표 안에서도 백틱 사이의 글을 **명령으로 실행**하고, PowerShell은 백틱과 다음 글자를 **이스케이프 시퀀스로 해석**합니다. 이 훅은 Claude Code·Codex·Antigravity가 셸을 호출할 때 명령을 미리 읽고, 원문을 바꿀 수 있는 패턴을 발견하면 차단 위치를 알려 줍니다.
 
-Use a trusted copy of the package and a user-controlled **Python 3.11 or newer**. The installer rejects Python 3.10 and earlier. From the package root, choose your host. For example, these commands register and check the Codex hook on Windows.
+[설치](#install-and-check) · [내 대화에서 확인](#probe-your-host) · [한국어 상세 안내](README.ko.md) · [English guide](README.en.md)
 
-~~~powershell
+## 🔎 어떤 명령을 검사하나요?
+
+| 셸 | 차단하는 예 | 통과하는 예 |
+|---|---|---|
+| **Bash** | 큰따옴표 안에서 백틱으로 명령을 치환하는 경우 | 작은따옴표로 감싸 백틱을 글자 그대로 출력하는 경우 |
+| **PowerShell** | `gh release create --notes`처럼 게시 본문을 쓰는 명령에 활성 백틱이 있는 경우 | `Write-Output`만 호출하면서 탭을 출력하는 경우 |
+
+```mermaid
+flowchart TD
+    event["호스트가 셸 명령을 보내기 전"]:::entry --> shell{"어떤 검사기를 사용하는가?"}:::entry
+    shell -->|Bash| b["인용 상태와 명령 치환 검사"]:::bash
+    shell -->|PowerShell| p["Git·gh 게시 동작과 활성 백틱 검사"]:::ps
+    b --> found{"차단 패턴 발견?"}:::entry
+    p --> found
+    found -->|예| deny["위치를 알려 주고 호출 차단"]:::deny
+    found -->|아니요| pass["호출 통과"]:::pass
+    classDef entry fill:#131621,stroke:#9ba9c1,color:#f2f5fb
+    classDef bash fill:#063b36,stroke:#00f5d4,color:#e2fff9
+    classDef ps fill:#30214b,stroke:#c084fc,color:#f6edff
+    classDef deny fill:#4a3012,stroke:#ffbb54,color:#fff3d9
+    classDef pass fill:#143a30,stroke:#66e8b5,color:#e4fff6
+```
+
+> [!TIP]
+> 릴리스 노트나 커밋 메시지에 마크다운 예시가 많다면 본문을 파일에 쓰세요. GitHub CLI에는 `--notes-file`이나 `--body-file`로, Git에는 `git commit -F`로 파일을 넘길 수 있습니다.
+
+<a name="install-and-check"></a>
+
+## 🚀 설치와 확인
+
+[릴리스 ZIP](https://github.com/Technoetic/backtick-check-hook/releases/download/v0.1.0/backtick-check-hook-0.1.0.zip)을 풀고 `install.py`가 있는 폴더에서 시작하세요. 다음은 **Windows에서 Codex**에 설치하는 예입니다.
+
+```powershell
 python -I -X utf8 -B install.py install --host codex
 python -I -X utf8 -B install.py doctor --host codex
-~~~
+```
 
-Use `claude`, `codex` or `antigravity` for `--host`. With the Windows Python launcher, replace `python` with `py -3`. On POSIX use `python3`. The installer registers the interpreter used to run it, copies the host's files and the license into a `backtick-check-hook` directory beside the user's configuration, and registers the handlers there. Installation and removal check for conflicting edits. Keep a copy of your configuration if you need to restore its exact formatting.
+> [!IMPORTANT]
+> 설치에는 **Python 3.11 이상**이 필요합니다. Windows에서 **Claude Code**를 쓸 때는 **Git Bash**도 필요합니다. POSIX에서는 위 명령의 `python`을 `python3`로 바꾸세요.
 
-| Host | Registration and verdict | After installation |
+| 사용할 호스트 | `--host` 값 | 설치한 뒤 |
 |---|---|---|
-| Claude Code | **Windows requires Git Bash for this hook.** Installation refuses to register it when Git Bash is missing. When the host shell is Bash it runs the hook script in that shell. Other POSIX shells, including dash, dispatch to `/bin/bash`. Bash and Monitor use the Bash checker, PowerShell uses the publishing checker. On these supported paths, checker exit 42 yields hook exit 2 (deny), and the wrapper maps other checker exits to 0. | Choose either user settings or the native plugin. Start a new session and run the probes below. At SessionStart the user installation tests the handler registered in `settings.json` and the native plugin tests its own `hooks/hooks.json`. The self-test returns 10 when healthy. Its wrapper reports a failed self-test or missing launcher, then exits 0. |
-| Codex | A user PreToolUse hook matches the tool name `Bash`. On Windows the adapter runs in Windows PowerShell. A denial returns JSON and exit 0. The Windows adapter allows the call if its checker exceeds 10 seconds. The host timeout is 30 seconds. | Trust the declaration in the running client. In the CLI open `/hooks`. In the desktop app select **Review hooks** or **Settings → Hooks**. If a separate process recorded trust, restart Codex or reload the VS Code window. Run the probes in a new conversation and a child created in it. A separate `hooks/list` query reports the querying process's state. |
-| Antigravity | A named entry in the user's `hooks.json` handles `run_command` and `manage_task` input delivery. Windows CLI 1.5.17 was observed to use `cmd /c` and to accept empty stdout with exit 0 as a pass. The adapter returns JSON to deny. The Windows wrapper exits 0 on launcher failure. | Start a new conversation. To refresh existing conversations, restart the hub. Repeat the probes after updates. Duplicate registrations can run twice. |
+| Claude Code | `claude` | 사용자 설치와 네이티브 플러그인 중 하나를 선택하고 새 대화에서 확인합니다. |
+| Codex | `codex` | 실행 중인 CLI의 <kbd>/hooks</kbd> 또는 데스크톱 앱의 **Review hooks**에서 선언을 신뢰합니다. 새 대화와 거기서 만든 하위 대화에서 확인합니다. |
+| Antigravity | `antigravity` | 새 대화에서 확인합니다. 기존 대화에도 적용하려면 허브를 다시 시작합니다. |
 
-For registration across sessions, use the installer. It writes only to user-level registrations. For a single Claude Code session, `claude --plugin-dir` followed by the absolute package path loads the native plugin. This route also requires Git Bash on Windows. Without it the hook commands fail in PowerShell. On hosts that honor `onFailure: continue`, calls proceed unchecked. SessionStart cannot issue its warning. The plugin uses the first eligible `python3` on POSIX, or `python.exe` then `py -3` on Windows, from absolute directories on `PATH` outside the workspace. With Python below 3.11 it skips checks and warns at SessionStart. Both Claude routes on POSIX require `/bin/sh` and `/bin/bash`. Use a trusted directory outside editable projects. Anyone who can change a project's files can change its project-local hooks. On Windows the Codex and Antigravity registrations select the PowerShell checker even when a request includes a different shell hint. On POSIX those registrations select the Bash checker. Actual shell selection in live Linux and macOS sessions is unmeasured.
+Codex와 Antigravity의 설치형 훅은 Windows에서 PowerShell 검사기, POSIX에서 Bash 검사기를 사용합니다. Claude Code는 호출된 도구에 따라 검사기를 선택합니다.
 
-`doctor` checks registration, interpreter availability, installed file hashes and synthetic events. It warns if Python is below 3.11. A passing result concerns the installed command. Run the probes in a fresh host session, then use `record-probe --host HOST --host-version VERSION` to record the running host version. On later checks pass it to `doctor --host HOST --host-version VERSION`. Disk and running versions can differ. Codex's trust hash covers the declaration. Review any change to the declaration, adapter or checker and renew trust after editing the declaration.
+> [!CAUTION]
+> 훅은 사용자 권한으로 실행됩니다. 다른 사람이 수정할 수 있는 프로젝트 폴더 밖에 신뢰할 수 있는 사본을 두세요. 설정 파일의 서식까지 복원해야 한다면 설치 전에 사본을 보관하세요. [보안과 신뢰](SECURITY.md)
 
-Claude's PreToolUse declarations set `onFailure` to `continue` for hook execution errors. An intentional exit 2 still denies the call. This option requires Claude Code 2.1.295 or newer. In offline strict validation, 2.1.248 and 2.1.252 reported no hook entries and accepted both this value and an invalid value. Version 2.1.330 rejected the invalid value. Live handling of this field is unverified on every version tested. [Claude Code hook reference](https://code.claude.com/docs/en/hooks)
+<a name="probe-your-host"></a>
 
-Codex and Antigravity use user hook declarations in this installation. Native Codex plugin trust can also cover bundled script changes. Native Antigravity plugins support a root `hooks.json` and paths relative to that root. This installer registers absolute installed paths. [Codex hook trust](https://developers.openai.com/codex/hooks/) · [Antigravity plugin layout](https://antigravity.google/docs/build-plugins.md)
+## 🧪 내 대화에서 확인하기
 
-## Probe your host
+`doctor`는 설치 파일·등록·합성 이벤트를 확인합니다. 실제 대화에서는 호스트가 쓰는 셸에 맞춰 **한 줄씩 별도 호출**로 보내세요. 두 예시 모두 첫 줄은 거짓 분기여서 본문의 명령이 실행되지 않습니다.
 
-On Windows, `doctor` exercises the installed Codex command under both cmd and PowerShell. The Codex adapter and interpreter paths may contain spaces and non-ASCII characters. For Codex the installer rejects characters it cannot quote safely for both command shells, including percent, exclamation, dollar and backtick characters. For Antigravity, the installer uses an unquoted, shell-safe absolute path or a Windows 8.3 short name for the same file. If neither is available it refuses installation. A Windows profile path with spaces needs a usable short-name alias for the settings path. If the interpreter path cannot be represented, rerun the installer with Python 3.11 or later from a shell-safe path. Removing a short-name alias later can break that registration. Rerun `doctor` after changing filesystem aliases. The Antigravity check exercises cmd with a raw command line and with an argument list. The live host's argument-passing convention is unmeasured.
+**PowerShell** · Windows용 Codex·Antigravity 또는 Claude Code의 PowerShell 도구
 
-Send each line as its own shell tool call. For the Claude PowerShell tool or Windows Codex and Antigravity PowerShell routes, use the following commands.
-
-~~~powershell
+```powershell
 if ($false) { gh release create v0.0.0-probe --notes "probe `x` text" }
 Write-Output "a`tb"
 echo plain
-~~~
+```
 
-The first call should stop before the shell runs. Look for `[backtick-check-hook]` anywhere in the message and the reported positions 1:61 and 1:63. The false branch keeps the release command inactive. The next two calls should return exit 0 and print a tab between a and b, then the word `plain`. If another hook blocks first, attribution is inconclusive.
+정상이라면 첫 줄은 `[backtick-check-hook]`과 위치 **1:61, 1:63**을 표시하며 차단돼야 합니다. 둘째 줄은 `a`와 `b` 사이에 탭 하나를, 셋째 줄은 `plain`을 출력해야 합니다.
 
-Use the Bash probes below only for Claude's Bash or Monitor tool or the POSIX Codex and Antigravity registrations. The first call should be blocked with the same marker. The other two should print their literal text.
+<details>
+<summary><strong>Bash에서 보낼 세 줄</strong> · Claude Code의 Bash·Monitor 또는 POSIX용 Codex·Antigravity</summary>
 
-~~~bash
+```bash
 if false; then echo "probe `x` text"; fi
 echo 'literal `x`'
 echo plain
-~~~
+```
 
-### Live host measurements
+정상이라면 첫 줄은 같은 표지와 함께 차단돼야 합니다. 둘째 줄은 백틱 두 개를 포함한 원문을, 셋째 줄은 `plain`을 출력해야 합니다.
 
-| Host | Running version | Mode | OS | Execution shell | Date / commit | Result |
-|---|---|---|---|---|---|---|
-| Claude Code | — | — | — | — | — | Untested |
-| Codex | — | — | — | — | — | Untested |
-| Antigravity | — | — | — | — | — | Untested |
+</details>
 
-The table covers version 0.1.0 in live host sessions. Local adapter tests use synthetic events. Antigravity's hook protocol lists `decision` as required. Empty output was accepted as a pass in CLI 1.5.17 in review and automatic modes. How the host handles its own timeout is unmeasured. [Antigravity hooks](https://antigravity.google/docs/hooks.md)
+<a name="limits-and-false-positives"></a>
 
-## Limits and false positives
+> [!WARNING]
+> PowerShell에서는 게시 동작이 포함된 **호출 전체**를 검사합니다. 같은 호출 안의 다른 명령에 든 이스케이프도 차단될 수 있습니다. 훅이 미신뢰 상태이거나 검사 시간이 초과되면 명령이 검사 없이 실행될 수 있습니다. [검사 범위와 오탐](README.ko.md#남는-틈과-과잉-차단)
 
-- **Bash syntax.** The checker approximates Bash quoting and can miss rare constructs. Single quotes, ANSI-C quoted strings, quoted heredocs, comments and a single escaped backtick normally preserve literal text. The shipped hooks allow dollar-parenthesis substitutions. Only the checker CLI's `--strict` option checks some mixed-text substitutions. Scripts inside separately quoted shell or SSH arguments, and variable expansion that silently changes text, fall outside this check.
-- **Bash parsing limits.** The checker reads the raw command and a form with folded backslashes. On Windows it also accounts for Git Bash dropping carriage returns. A launcher with different quoting behavior can produce unnecessary blocks. Array subscripts can depend on the variable's runtime type. Incomplete heredocs can make later text ambiguous. At depth 150 or the three-second scan budget, the parser uses the findings so far. SessionStart checks Bash and Monitor at startup, resume, clear, compact and fork. A hook that never starts or is changed between checks can go undetected. SessionStart warnings are not visible to subagents.
-- **PowerShell scope.** The checker recognizes common text-writing forms of gh release, pr, issue and api, and git commit, tag, notes and merge. Earlier writes to a body file, commands in a script file, splatted or variable-built arguments, dynamic commands, Start-Process, encoded commands and generated script blocks can escape recognition. Examples outside the recognized set include gh repo edit --description, gh secret set --body, git stash -m and git commit-tree. If one shell starts another, the checker may parse for the wrong shell. Codex `write_stdin` input bypasses PreToolUse and receives no check. Some specialized Codex tool paths can also skip PreToolUse. Antigravity compares tool and argument names literally, including case. An unrecognized spelling receives no check. Input sent to a different kind of shell can be interpreted differently. [Codex hook coverage](https://developers.openai.com/codex/hooks/)
-- **PowerShell grammar and bounds.** Recognition can miss comments between command words, a single quote inside a comment immediately following an expression, a block-comment opener after a dollar sign, parenthesized option values, an implicit or line-split -Command, and indirect evaluation beyond three levels. Attached or abbreviated tag/merge message options can also be missed. Git prefixes are limited to 32 options and searches after certain verbs to 4,000 characters. The checker may refuse a command containing a backtick and a recognized publishing operation if it exceeds 400,000 characters or parsing is incomplete.
-- **Whole-command matches.** A publishing verb in a comment or quoted example, an indirect evaluation elsewhere, an unrelated escape alongside a file-based commit, or an amend with --no-edit can trigger a block. An expression-adjacent comment or text after the PowerShell stop-parsing token may be read as ordinary arguments. Read-only gh api followed by -First, -Force, -Filter or -FilePath can look like a field write. Read-only git tag or notes can match words or switches in another statement. Separate unrelated operations and write publication text to a file before passing its name to Git or the GitHub CLI.
-- **Errors and timeouts.** A missing or untrusted hook, a missing interpreter, malformed input or a processing error can leave a command unchecked. The Codex Windows adapter allows the call after its own 10-second checker timeout. Codex can also proceed after its 30-second host timeout. Claude Code can proceed unchecked after its 15-second PreToolUse timeout. Antigravity's adapter returns empty output if the checker exceeds 10 seconds, so a command can proceed unchecked. Its host declaration requests 15 seconds. On Windows a Git Bash hook's child process can outlive a timed-out wrapper. [Claude Code hook timeouts](https://code.claude.com/docs/en/hooks)
+<a name="live-host-measurements"></a>
+<a name="python-version-and-local-launcher-timings"></a>
 
-### Python version and local launcher timings
+## 📊 v0.1.0 검증 결과
 
-**Why Python 3.11 is required.** Python 3.10 lacks possessive regex quantifiers. Its fallback uses ordinary quantifiers, so the PowerShell checker's runtime can grow exponentially with repeated CRLF continuations. A Python 3.10.11 measurement took 3.3 seconds for 20 continuations and 12.3 seconds for 22. If the checker reaches the hook's timeout the command can proceed unchecked. Use Python 3.11 or newer.
+릴리스 태그의 Windows CI는 Python 3.11~3.15와 콘솔 코드 페이지 949·65001을 조합했습니다. 한 조합에서 126건씩, 총 $5 \times 2 \times 126 = 1{,}260$건이 통과했습니다. Ubuntu에서 재생성한 ZIP의 SHA-256도 릴리스 첨부 파일과 일치했습니다. [태그 CI의 11개 작업](https://github.com/Technoetic/backtick-check-hook/actions/runs/45879942164)
 
-Installed hooks were measured in a temporary home on Windows 11 Insider build 26300.9974, with Python 3.12.10, Git Bash 5.3.15, Windows PowerShell 5.1.26100.9818 and cmd from that Windows build. The measurement ran on 2026-11-26 (KST) at commit `c850100731ec`. Its hook, launcher, checker and installer files are byte-identical to this version. The table gives median launch-to-exit times in milliseconds over seven runs after one warm-up. Live session latency for version 0.1.0 is unmeasured.
+<details open>
+<summary><strong>훅이 호출되는 과정과 Windows에서 측정한 응답 시간</strong></summary>
 
-| Installed hook | Empty shell | Plain event | Denied event |
-|---|---:|---:|---:|
-| Claude Code (Git Bash) | 329.8 | 301.9 | 885.6 |
-| Codex (cmd / Windows PowerShell) | 51.6 | 419.6 | 848.0 |
-| Antigravity (cmd / Python) | 55.2 | 132.0 | 206.8 |
+| 셸 명령 한 건의 흐름 | 차단 응답 시간 |
+|:---:|:---:|
+| <picture><source media="(prefers-reduced-motion: reduce)" srcset="docs/art/flow.png"><img src="docs/art/flow.gif" alt="셸 입력이 백틱 검사를 거쳐 호스트 판정으로 이어지는 세 단계"></picture> | [![합성 입력 차단 중앙값. Claude Code 885.6ms, Codex 848.0ms, Antigravity 206.8ms](docs/art/timing.svg)](docs/art/timing.svg) |
+| 시연용 예시. 이동 속도는 측정값과 무관합니다. | 설치된 훅에 합성 입력을 보낸 뒤 응답까지 측정한 값입니다. |
 
-One direct Claude self-test took 3129.1 ms (exit 10). One call through the installed SessionStart hook took 2967.9 ms (exit 0). Codex and Antigravity have no SessionStart registration.
+</details>
 
-## Remove, troubleshoot and test
+> [!NOTE]
+> 시간 차트는 Windows에서 한 번 예열한 뒤 7회 측정한 중앙값입니다. **0.1.0을 설치한 세 호스트의 실제 대화와 체감 지연은 미시험**입니다. [측정 환경과 평문·차단 시간표](README.ko.md#python-버전과-로컬-실행-시간)
 
-Run `python -I -X utf8 -B install.py uninstall --host HOST` for the host you installed. The installer checks its installation record before removing owned files and handlers. If the package directory is already gone and registration remains, inspect the host configuration and remove the stale hook before reinstalling. If you manually removed a handler but still have the package, back up the current configuration and restore just the missing handler from the receipt’s `entries` in `backtick-check-hook/state.json` under its original event and matcher. Preserve other registrations, then rerun uninstall. If a malformed Claude hook blocks shell calls, disable the registration in the plugin screen or a text editor, then start a new session. A shell syntax error can itself produce exit 2, which Claude treats as a denial. Separately registered plugins and project hooks have their own registrations.
+<a name="remove-troubleshoot-and-test"></a>
 
-On Windows, in PowerShell set `$env:BACKTICK_TIMING_SCALE = '3'` for the same allowance as CI, then run `python -B tools/test_windows.py 65001` and `python -B tools/test_windows.py 949`. Each command starts a separate console and runs the tests in temporary homes. Install Git Bash and PowerShell 7 for their respective tests. Windows PowerShell 5.1 is checked separately. The suite compares Bash 5.3 syntax with Git Bash. `BACKTICK_TIMING_SCALE` multiplies the absolute timing assertions (0.1, 0.5, 1.0 and 2.0 seconds). Choose a value greater than 0 and at most 10. Select 1 for a strict check against the original limits. The default is 1. The setting affects test time limits. When writing release notes and commit messages, create the text in a file editor and pass the file with `--notes-file`, `--body-file` or `git commit -F`.
+## 🧰 제거와 문제 해결
+
+Codex에 등록한 훅을 제거하려면 설치에 사용한 패키지 폴더에서 다음 명령을 실행하세요. 다른 호스트를 선택했다면 `codex` 자리에 그 호스트 값을 넣습니다.
+
+```powershell
+python -I -X utf8 -B install.py uninstall --host codex
+```
+
+등록을 수동으로 편집했거나 제거 중 충돌이 난 경우에는 설치 기록에서 해당 처리기를 확인하세요. [복원 절차와 로컬 시험](README.ko.md#제거문제-해결시험) · [변경 기록](CHANGELOG.md)
+
+<details>
+<summary><strong>코드에서 검사기와 시험 찾기</strong></summary>
+
+<!-- md-viz:start:repo-tree -->
+```text
+backtick-check-hook/  ← 패키지 루트
+├── .claude-plugin/   ← Claude Code 플러그인 선언
+├── .github/          ← Windows 시험과 ZIP 재현성 검사
+├── hooks/            ← Claude Code 훅 선언과 셸 실행기
+├── scripts/          ← Bash·PowerShell 검사기와 호스트 어댑터
+├── tests/            ← 판정·설치·호스트 호출 회귀 시험
+├── tools/            ← Windows 코드 페이지별 시험 실행기
+└── install.py        ← 호스트별 설치·진단·제거
+```
+<!-- md-viz:end:repo-tree -->
+
+</details>

@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="123" height="28" viewBox="0 0 123 28" role="img" aria-labelledby="title">
+  <title id="title">라이선스 · MIT</title>
+  <rect width="80" height="28" fill="#20283A"/>
+  <rect x="80" width="43" height="28" fill="#C084FC"/>
+  <g font-family="Verdana, DejaVu Sans, Malgun Gothic, sans-serif" font-size="11" font-weight="700" text-anchor="middle" letter-spacing=".7">
+    <text x="40" y="18" fill="#ffffff" textLength="60" lengthAdjust="spacingAndGlyphs">라이선스</text>
+    <text x="101.5" y="18" fill="#000000" textLength="23" lengthAdjust="spacingAndGlyphs">MIT</text>
+  </g>
+</svg>

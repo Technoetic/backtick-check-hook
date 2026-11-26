@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="728" height="210" viewBox="0 0 728 210" role="img" aria-labelledby="title desc">
+  <title id="title">차단까지 걸린 시간</title>
+  <desc id="desc">Windows 설치형 훅의 차단 중앙값. Claude Code 885.6 ms, Codex 848.0 ms, Antigravity 206.8 ms.</desc><rect width="728" height="210" rx="12" fill="#0B0F1A" stroke="#27304A" stroke-width="1.5" />
+  <rect x="0" y="0" width="728" height="5" rx="2" fill="#00F5D4" />
+  <text x="26" y="38" fill="#F8FAFC" font-family="ui-sans-serif, system-ui, Segoe UI, Arial, 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="19" font-weight="700">차단까지 걸린 시간</text>
+  <text x="702" y="38" text-anchor="end" fill="#00F5D4" font-family="ui-monospace, SFMono-Regular, Consolas, 'Malgun Gothic', 'Apple SD Gothic Neo', monospace" font-size="12" font-weight="700">합성 입력 · 7회 중앙값</text>
+  <text x="144" y="88" text-anchor="end" fill="#F8FAFC" font-family="Segoe UI, Arial, 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="14" font-weight="600">Claude Code</text>
+  <rect x="156" y="70" width="442" height="26" rx="6" fill="#131621" />
+  <rect x="156" y="70" width="442" height="26" rx="6" fill="#00F5D4" />
+  <text x="610" y="88" fill="#00F5D4" font-family="ui-monospace, Consolas, 'Malgun Gothic', 'Apple SD Gothic Neo', monospace" font-size="14" font-weight="700">885.6 ms</text>
+  <text x="144" y="130" text-anchor="end" fill="#F8FAFC" font-family="Segoe UI, Arial, 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="14" font-weight="600">Codex</text>
+  <rect x="156" y="112" width="442" height="26" rx="6" fill="#131621" />
+  <rect x="156" y="112" width="423" height="26" rx="6" fill="#FFBB54" />
+  <text x="610" y="130" fill="#FFBB54" font-family="ui-monospace, Consolas, 'Malgun Gothic', 'Apple SD Gothic Neo', monospace" font-size="14" font-weight="700">848.0 ms</text>
+  <text x="144" y="172" text-anchor="end" fill="#F8FAFC" font-family="Segoe UI, Arial, 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="14" font-weight="600">Antigravity</text>
+  <rect x="156" y="154" width="442" height="26" rx="6" fill="#131621" />
+  <rect x="156" y="154" width="103" height="26" rx="6" fill="#C084FC" />
+  <text x="610" y="172" fill="#C084FC" font-family="ui-monospace, Consolas, 'Malgun Gothic', 'Apple SD Gothic Neo', monospace" font-size="14" font-weight="700">206.8 ms</text>
+</svg>

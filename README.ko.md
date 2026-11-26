@@ -2,7 +2,7 @@
 
 코딩 도구가 마크다운 예시를 셸로 보낼 때 백틱 때문에 내용이 달라질 수 있다. 이 훅은 Bash의 명령 치환과 Git·GitHub CLI로 글을 쓰는 PowerShell 명령 안의 활성 백틱을 검사한다. 일반 출력 명령에 쓰는 PowerShell 탭 이스케이프는 통과한다.
 
-[English](README.md) · [보안과 신뢰](SECURITY.md) · [변경 기록](CHANGELOG.md)
+[첫 화면](README.md) · [English](README.en.md) · [보안과 신뢰](SECURITY.md) · [변경 기록](CHANGELOG.md)
 
 ## 설치와 확인
 
