@@ -59,30 +59,30 @@ echo plain
 | Codex | — | — | — | — | — | 미시험 |
 | Antigravity | — | — | — | — | — | 미시험 |
 
-이 표의 범위는 실제 호스트 대화에서 실행한 0.1.0이다. 로컬 어댑터 시험에는 합성 이벤트를 쓴다. Antigravity 훅 규약은 `decision`을 필수 필드로 명시한다. CLI 1.5.17의 검토·자동 모드에서는 빈 출력이 통과로 처리됐다. Antigravity 호스트 자체의 시간 초과 처리는 미측정이다. [Antigravity 훅](https://antigravity.google/docs/hooks.md)
+이 표의 범위는 실제 호스트 대화에서 실행한 0.2.0이다. 로컬 어댑터 시험에는 합성 이벤트를 쓴다. Antigravity 훅 규약은 `decision`을 필수 필드로 명시한다. CLI 1.5.17의 검토·자동 모드에서는 빈 출력이 통과로 처리됐다. Antigravity 호스트 자체의 시간 초과 처리는 미측정이다. [Antigravity 훅](https://antigravity.google/docs/hooks.md)
 
 ## 남는 틈과 과잉 차단
 
 - **Bash 문법.** 검사기는 Bash 인용 규칙을 근사하므로 드문 구문을 놓칠 수 있다. 작은따옴표, ANSI-C 인용 문자열, 구분자를 인용한 히어독, 주석, 역슬래시 하나로 이스케이프한 백틱은 일반적으로 글자를 보존한다. 기본 제공 훅은 달러-괄호 명령 치환을 허용한다. 검사기 CLI에서 `--strict`를 직접 지정해야 일부 혼합 문자열의 치환도 검사한다. 별도로 인용한 셸·SSH 인자 안의 스크립트, 글을 조용히 바꾸는 변수 치환은 검사 범위 밖이다.
 - **Bash 해석의 한계.** 검사기는 원문과 역슬래시를 접은 형태를 함께 읽는다. Windows에서는 Git Bash가 캐리지 리턴(CR)을 버리는 동작도 반영한다. 셸 호출 프로그램의 인용 규칙이 다르면 불필요하게 막을 수 있다. 배열 첨자의 의미는 실행 시 변수의 종류에 따라 달라질 수 있다. 끝맺지 않은 히어독 뒤의 글은 해석이 모호할 수 있다. 깊이 150 또는 검사 예산 3초에 도달하면 그때까지의 결과로 판정한다. SessionStart는 시작·재개·clear·compact·fork 때 Bash와 Monitor를 확인한다. 훅 자체가 시작하지 않거나 점검 사이에 바뀌면 감지하지 못할 수 있다. SessionStart 경고는 하위 에이전트에게 보이지 않는다.
-- **PowerShell 인식 범위.** 검사기는 gh release·pr·issue·api, git commit·tag·notes·merge에서 흔히 쓰는 글쓰기 형식을 인식한다. 앞선 호출에서 본문 파일에 쓴 글, 스크립트 파일 안의 명령, 스플래팅·변수로 구성한 인자, 동적 명령, Start-Process, 인코딩한 명령, 생성한 스크립트 블록은 놓칠 수 있다. gh repo edit --description, gh secret set --body, git stash -m, git commit-tree 등은 인식 범위 밖이다. 한 셸이 다른 셸을 띄우면 실제와 다른 셸의 규칙으로 검사할 수 있다. Codex의 `write_stdin` 입력은 PreToolUse를 거치지 않아 검사되지 않는다. 일부 특수 Codex 도구 경로도 PreToolUse를 건너뛸 수 있다. Antigravity는 도구 이름과 인자 이름을 대소문자까지 문자 그대로 비교한다. 인식하지 못하는 표기는 검사되지 않는다. 다른 종류의 셸로 전달한 입력은 다르게 해석될 수 있다. [Codex 훅 적용 범위](https://developers.openai.com/codex/hooks/)
-- **PowerShell 문법과 상한.** 명령 낱말 사이의 주석, 식 바로 뒤 주석 안의 작은따옴표, 달러 기호 뒤의 블록 주석 시작, 괄호로 쓴 옵션 값, 생략하거나 줄을 나눈 -Command, 세 단계를 넘는 간접 평가는 인식하지 못할 수 있다. tag·merge의 붙여 쓴 메시지 옵션과 축약형도 놓칠 수 있다. Git 동사 앞 옵션은 32개까지 읽고, 일부 동사 뒤의 검색은 4,000자로 제한한다. 백틱과 인식된 게시 동작이 있는 명령이 400,000자를 넘거나 해석을 끝내지 못하면 차단할 수 있다.
-- **호출 전체를 검사해서 생기는 차단.** 주석·인용 예시에 든 게시 동사, 다른 곳의 간접 평가, 파일로 커밋하는 명령과 무관한 이스케이프, --no-edit를 붙인 amend가 섞이면 막을 수 있다. 식에 붙은 주석과 PowerShell 구문 분석 중지 토큰 뒤의 글을 일반 인자로 읽을 수 있다. 읽기 전용 gh api 뒤의 -First·-Force·-Filter·-FilePath는 필드 쓰기로 인식할 수 있다. 읽기 전용 git tag·notes는 다른 문장의 낱말이나 스위치와 일치할 수 있다. 서로 다른 작업은 호출을 나누고, 게시 본문은 파일에 작성한 뒤 Git이나 GitHub CLI에 파일명을 넘긴다.
+- **PowerShell 인식 범위.** 검사기는 gh release·pr·issue·api, git commit·tag·notes·merge에서 흔히 쓰는 글쓰기 형식을 인식한다. 인라인 인자만 쓰는 게시 명령은 그 게시 문장과 참조 변수·하위식(`$n`, `$(...)`, 다단계 변수 연쇄 포함)에 연결된 문장의 활성 백틱만 차단한다. 새 글을 넘기지 않는 `git commit --no-edit`(예: `--amend --no-edit`)·`-C`·`--reuse-message`(단 `-m`/`-F`/`-e`/`-t`·앞쪽 파이프 없음), 문장 경계 안의 읽기 전용 `git tag`/`notes`/`merge`·`gh api`, 간접 실행 없이 문자열·주석 안에만 존재하는 게시 동사는 제외한다. 스플래팅(`@var`), `$_`/`$PSItem`/`$args`/`$input`, 동적 변수 설정(`Set-Variable`/`function`/`param`/`-OutVariable`), `[scriptblock]::Create`·`InvokeScript`·코드 자리 문자열/변수 대상 `&`는 명령 전체 규칙으로 복귀한다. 다만 앞선 호출에서 본문 파일에 쓴 글, 스크립트 파일(`.ps1`) 안의 명령, 변수에 숨긴 파일 플래그(`$flag="--notes-file"` + 별도 파일 쓰기), 동적 명령 이름, Start-Process, 인코딩한 명령(`-EncodedCommand`)은 놓칠 수 있다. gh repo edit --description, gh secret set --body, git stash -m, git commit-tree 등은 인식 범위 밖이다. 한 셸이 다른 셸을 띄우면 실제와 다른 셸의 규칙으로 검사할 수 있다. Codex의 `write_stdin` 입력은 PreToolUse를 거치지 않아 검사되지 않는다. 일부 특수 Codex 도구 경로도 PreToolUse를 건너뛸 수 있다. Antigravity는 도구 이름과 인자 이름을 대소문자까지 문자 그대로 비교한다. 인식하지 못하는 표기는 검사되지 않는다. 다른 종류의 셸로 전달한 입력은 다르게 해석될 수 있다. [Codex 훅 적용 범위](https://developers.openai.com/codex/hooks/)
+- **PowerShell 문법과 상한.** 명령 낱말 사이의 주석, 식 바로 뒤 주석 안의 작은따옴표, 달러 기호 뒤의 블록 주석 시작, 괄호로 쓴 옵션 값, 생략하거나 줄을 나눈 -Command, 세 단계를 넘는 간접 평가는 인식하지 못할 수 있다. tag·merge의 붙여 쓴 메시지 옵션과 축약형도 놓칠 수 있다. Git 동사 앞 옵션은 32개까지 읽고, 예외 폴백 시 동사 뒤 검색은 4,000자로 제한한다. 백틱과 인식된 게시 동작이 있는 명령이 400,000자를 넘거나 닫히지 않은 따옴표·주석·괄호 등으로 해석을 끝내지 못하면 보수적으로 차단한다.
+- **보수적 과잉 차단.** 파일·표준 입력·파이프 게시(`-F`, `--notes-file`, `--body-file`, `--input`, `-t`, `gh api -F`, 앞쪽 `|`)와 같은 호출에 무관한 이스케이프(`` "`n" ``)를 섞거나, 인라인 게시가 참조하는 변수를 읽기 전용으로만 쓰는 다른 문장에 백틱이 있거나, 같은 호출 어딘가에 간접 실행·동적 변수 설정이 함께 있으면 명령 전체 규칙에 따라 막힐 수 있다. 식에 붙은 주석과 PowerShell 구문 분석 중지 토큰(`--%`) 뒤의 글도 일반 인자로 읽을 수 있다. 그런 경우에는 서로 다른 작업의 호출을 나누고, 게시 본문은 파일에 작성한 뒤 Git이나 GitHub CLI에 파일명을 넘긴다.
 - **오류와 시간 초과.** 훅이 없거나 미신뢰 상태인 경우, 인터프리터가 없는 경우, 입력 형식이나 처리에 오류가 난 경우에는 검사 없이 진행될 수 있다. Codex의 Windows 어댑터는 자체 검사기 제한인 10초가 지나면 호출을 통과시킨다. Codex는 호스트의 30초 제한이 지난 뒤에도 검사를 생략할 수 있다. Claude Code도 PreToolUse의 15초 제한이 지나면 검사 없이 진행할 수 있다. Antigravity 어댑터는 검사기가 10초를 넘으면 빈 출력을 반환하므로 명령이 검사 없이 진행될 수 있다. Antigravity 호스트 선언의 제한은 15초다. Windows에서는 Git Bash 훅 래퍼가 시간 초과로 끝나도 자식 프로세스가 남을 수 있다. [Claude Code 훅 시간 제한](https://code.claude.com/docs/en/hooks)
 
 ### Python 버전과 로컬 실행 시간
 
 **Python 3.11 이상이 필요한 이유.** Python 3.10은 정규식의 소유 한정자를 지원하지 않는다. 대체 패턴은 일반 한정자를 쓰므로 CRLF 줄 이음이 반복되면 PowerShell 검사 시간이 지수적으로 늘어날 수 있다. Python 3.10.11에서 줄 이음 20개는 3.3초, 22개는 12.3초가 걸렸다. 훅의 시간 제한에 걸리면 명령이 검사 없이 진행될 수 있다. Python 3.11 이상을 사용한다.
 
-임시 홈에 설치한 훅을 Windows 11 Insider 빌드 26300.9974, Python 3.12.10, Git Bash 5.3.15, Windows PowerShell 5.1.26100.9818 및 같은 빌드의 cmd에서 측정했다. 측정일은 2026-11-26(KST), 측정 커밋은 `c850100731ec`이다. 훅·실행 스크립트·검사기와 설치기의 바이트가 이 버전과 같다. 표는 한 번 예열한 뒤 7회 측정한 시작부터 종료까지의 중앙값(ms)이다. 0.1.0 실제 대화의 지연은 미측정이다.
+임시 홈에 설치한 훅을 Windows 11 Insider 빌드 26300.9974, Python 3.12.10, Git Bash 5.3.15, Windows PowerShell 5.1.26100.9818 및 같은 빌드의 cmd에서 측정했다. 측정일은 2026-11-27(KST), 측정 커밋은 `90f43bf78b9d`이다. 훅·실행 스크립트·검사기와 설치기의 바이트가 이 버전과 같다. 표는 한 번 예열한 뒤 7회 측정한 시작부터 종료까지의 중앙값(ms)이다. 0.2.0 실제 대화의 지연은 미측정이다.
 
 | 설치형 훅 | 빈 셸 | 평문 | 차단 |
 |---|---:|---:|---:|
-| Claude Code (Git Bash) | 329.8 | 301.9 | 885.6 |
-| Codex (cmd / Windows PowerShell) | 51.6 | 419.6 | 848.0 |
-| Antigravity (cmd / Python) | 55.2 | 132.0 | 206.8 |
+| Claude Code (Git Bash) | 710.7 | 710.8 | 2512.2 |
+| Codex (cmd / Windows PowerShell) | 63.4 | 593.0 | 1103.9 |
+| Antigravity (cmd / Python) | 62.5 | 184.6 | 378.6 |
 
-Claude 자가 점검 직접 호출은 3129.1ms(종료 10), 설치된 SessionStart 호출은 2967.9ms(종료 0)였다. 두 값은 각각 한 번 측정했다. Codex와 Antigravity에는 SessionStart 등록이 없다.
+Claude 자가 점검 직접 호출은 6521.2ms(종료 10), 설치된 SessionStart 호출은 8386.8ms(종료 0)였다. 두 값은 각각 한 번 측정했다. Codex와 Antigravity에는 SessionStart 등록이 없다.
 
 ## 제거·문제 해결·시험
 

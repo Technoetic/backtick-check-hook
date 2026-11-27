@@ -1,7 +1,7 @@
 # 백틱 검사 훅
 
 <div align="center">
-  <a href="https://github.com/Technoetic/backtick-check-hook/releases/tag/v0.1.0"><img src="docs/art/release.svg" alt="릴리스 v0.1.0"></a>
+  <a href="https://github.com/Technoetic/backtick-check-hook/releases/tag/v0.2.0"><img src="docs/art/release.svg" alt="릴리스 v0.2.0"></a>
   <a href="#install-and-check"><img src="docs/art/python.svg" alt="Python 3.11 이상"></a>
   <a href="LICENSE"><img src="docs/art/license.svg" alt="MIT 라이선스"></a>
 </div>
@@ -17,7 +17,7 @@
 | 셸 | 차단하는 예 | 통과하는 예 |
 |---|---|---|
 | **Bash** | 큰따옴표 안에서 백틱으로 명령을 치환하는 경우 | 작은따옴표로 감싸 백틱을 글자 그대로 출력하는 경우 |
-| **PowerShell** | `gh release create --notes`처럼 게시 본문을 쓰는 명령에 활성 백틱이 있는 경우 | `Write-Output`만 호출하면서 탭을 출력하는 경우 |
+| **PowerShell** | `gh release create --notes`처럼 게시 본문을 인라인·참조 변수·파일/파이프로 넘길 때 활성 백틱이 있는 경우 | `Write-Output`만 호출하거나, `--amend --no-edit`·작은따옴표 게시와 분리된 문장의 탭·CR 이스케이프 |
 
 ```mermaid
 flowchart TD
@@ -42,7 +42,7 @@ flowchart TD
 
 ## 🚀 설치와 확인
 
-[릴리스 ZIP](https://github.com/Technoetic/backtick-check-hook/releases/download/v0.1.0/backtick-check-hook-0.1.0.zip)을 풀고 `install.py`가 있는 폴더에서 시작하세요. 다음은 **Windows에서 Codex**에 설치하는 예입니다.
+[릴리스 ZIP](https://github.com/Technoetic/backtick-check-hook/releases/download/v0.2.0/backtick-check-hook-0.2.0.zip)을 풀고 `install.py`가 있는 폴더에서 시작하세요. 다음은 **Windows에서 Codex**에 설치하는 예입니다.
 
 ```powershell
 python -I -X utf8 -B install.py install --host codex
@@ -95,27 +95,27 @@ echo plain
 <a name="limits-and-false-positives"></a>
 
 > [!WARNING]
-> PowerShell에서는 게시 동작이 포함된 **호출 전체**를 검사합니다. 같은 호출 안의 다른 명령에 든 이스케이프도 차단될 수 있습니다. 훅이 미신뢰 상태이거나 검사 시간이 초과되면 명령이 검사 없이 실행될 수 있습니다. [검사 범위와 오탐](README.ko.md#남는-틈과-과잉-차단)
+> PowerShell 인라인 게시는 해당 게시 문장과 참조 변수·하위식 흐름만 검사하지만, 파일·표준 입력·파이프(`-F`, `--notes-file`, `--body-file`, `--input`, 앞쪽 `|`)나 간접 실행·스플래팅·미종결 구문은 **호출 전체** 규칙을 유지합니다. 훅이 미신뢰 상태이거나 검사 시간이 초과되면 명령이 검사 없이 실행될 수 있습니다. [검사 범위와 오탐](README.ko.md#남는-틈과-과잉-차단)
 
 <a name="live-host-measurements"></a>
 <a name="python-version-and-local-launcher-timings"></a>
 
-## 📊 v0.1.0 검증 결과
+## 📊 v0.2.0 검증 결과
 
-릴리스 태그의 Windows CI는 Python 3.11~3.15와 콘솔 코드 페이지 949·65001을 조합했습니다. 한 조합에서 126건씩, 총 $5 \times 2 \times 126 = 1{,}260$건이 통과했습니다. Ubuntu에서 재생성한 ZIP의 SHA-256도 릴리스 첨부 파일과 일치했습니다. [태그 CI의 11개 작업](https://github.com/Technoetic/backtick-check-hook/actions/runs/45879942164)
+Windows CI는 Python 3.11~3.15와 콘솔 코드 페이지 949·65001을 조합합니다. 한 조합에서 130건씩, 총 $5 \times 2 \times 130 = 1{,}300$건을 실행하고 Ubuntu 작업에서 결정론적 ZIP 재현성과 SHA-256을 확인합니다. [Check 워크플로 실행 기록](https://github.com/Technoetic/backtick-check-hook/actions/workflows/check.yml)
 
 <details open>
 <summary><strong>훅이 호출되는 과정과 Windows에서 측정한 응답 시간</strong></summary>
 
 | 셸 명령 한 건의 흐름 | 차단 응답 시간 |
 |:---:|:---:|
-| <picture><source media="(prefers-reduced-motion: reduce)" srcset="docs/art/flow.png"><img src="docs/art/flow.gif" alt="셸 입력이 백틱 검사를 거쳐 호스트 판정으로 이어지는 세 단계"></picture> | [![합성 입력 차단 중앙값. Claude Code 885.6ms, Codex 848.0ms, Antigravity 206.8ms](docs/art/timing.svg)](docs/art/timing.svg) |
+| <picture><source media="(prefers-reduced-motion: reduce)" srcset="docs/art/flow.png"><img src="docs/art/flow.gif" alt="셸 입력이 백틱 검사를 거쳐 호스트 판정으로 이어지는 세 단계"></picture> | [![합성 입력 차단 중앙값. Claude Code 2512.2ms, Codex 1103.9ms, Antigravity 378.6ms](docs/art/timing.svg)](docs/art/timing.svg) |
 | 시연용 예시. 이동 속도는 측정값과 무관합니다. | 설치된 훅에 합성 입력을 보낸 뒤 응답까지 측정한 값입니다. |
 
 </details>
 
 > [!NOTE]
-> 시간 차트는 Windows에서 한 번 예열한 뒤 7회 측정한 중앙값입니다. **0.1.0을 설치한 세 호스트의 실제 대화와 체감 지연은 미시험**입니다. [측정 환경과 평문·차단 시간표](README.ko.md#python-버전과-로컬-실행-시간)
+> 시간 차트는 Windows에서 한 번 예열한 뒤 7회 측정한 중앙값입니다. **0.2.0을 설치한 세 호스트의 실제 대화와 체감 지연은 미시험**입니다. [측정 환경과 평문·차단 시간표](README.ko.md#python-버전과-로컬-실행-시간)
 
 <a name="remove-troubleshoot-and-test"></a>
 
