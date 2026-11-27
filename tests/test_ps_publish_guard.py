@@ -221,6 +221,205 @@ class DecisionTests(unittest.TestCase):
         self.assertTrue(g.find_problem(command).incomplete)
 
 
+# Narrowing regression suite (publish-statement & referenced variable/subexpression scope).
+NARROW_FIXTURES = (
+    (
+        "amend-no-edit-with-select-string-cr",
+        False,
+        "Set-Location D:\\worktrees\\repro-zip; git config --get core.autocrlf;"
+        " git add --renormalize docs/README.md docs/release-integrity.md; git diff --cached --stat;"
+        " git commit -q --amend --no-edit; git diff --stat 833d394 HEAD; git diff --check 833d394 HEAD;"
+        " \"diffcheck=$LASTEXITCODE\"; git status --short;"
+        " git show HEAD:docs/README.md | Select-String -Pattern \"{b}r\" | Measure-Object | Select-Object Count",
+    ),
+    (
+        "separate-statement-tab-and-single-quoted-gh",
+        False,
+        "\"tab:{b}t| (escape in a non-publishing command)\"\n"
+        "if ($false) { gh release create v0.0.0-guard-test --notes 'use {b}x{b} here' }\n"
+        "'single-quoted gh notes passed the guard'",
+    ),
+    (
+        "publish-verb-only-inside-output-string",
+        False,
+        "Write-Output \"hook live check (text only, nothing is published):"
+        " gh release create v0.0.0 --notes use {b}x{b} now\"",
+    ),
+    (
+        "if-false-double-quoted-notes-multiline",
+        True,
+        "if ($false) { gh release create v0.0.0-guard-test --notes \"use {b}x{b} here\" }\n"
+        "'guard did not block this command'",
+    ),
+    (
+        "if-false-probe-notes",
+        True,
+        "if ($false) { gh release create v0.0.0-probe --notes \"probe {b}x{b} text\" }",
+    ),
+    (
+        "if-false-issue-close-comment",
+        True,
+        "if ($false) { gh issue close 5 --comment \"Fixed in {b}abc123{b} now\" }",
+    ),
+    (
+        "git-commit-inline-m",
+        True,
+        "git commit -m \"fix {b}abc{b} parser\"",
+    ),
+    (
+        "variable-flow-to-notes",
+        True,
+        "$n = \"use {b}x{b} here\"; gh release create v9.9.9 --notes $n",
+    ),
+    (
+        "subexpression-inside-notes",
+        True,
+        "gh release create v9.9.9 --notes \"$(\"a{b}tb\")\"",
+    ),
+    (
+        "here-string-written-to-notes-file",
+        True,
+        "$b = @\"\n"
+        "use {b}x{b} here\n"
+        "\"@\n"
+        "Set-Content notes.md $b\n"
+        "gh release create v9.9.9 --notes-file notes.md",
+    ),
+    (
+        "piped-stdin-to-dash-F-dash",
+        True,
+        "\"use {b}x{b}\" | gh release create v9.9.9 -F -",
+    ),
+    (
+        "indirect-invoke-expression-variable",
+        True,
+        "$c = 'gh release create v9.9.9 --notes \"use {b}x{b}\"'; Invoke-Expression $c",
+    ),
+)
+
+NARROW_BOUNDARY_PASS = {
+    "amend-no-edit-then-tab": "if ($false) { git commit -q --amend --no-edit }; \"x{b}ty\" | Out-Null",
+    "commit-reuse-short-C": "git commit -C HEAD; Write-Output \"a{b}tb\"",
+    "commit-reuse-long": "git commit --reuse-message=HEAD; Write-Output \"a{b}tb\"",
+    "two-safe-publish-and-unrelated": (
+        "Write-Output \"tab:{b}t|\"\n"
+        "gh release create v1 --notes 'safe {b}x{b}'\n"
+        "git commit -m 'also {b}safe{b}'"
+    ),
+    "crlf-unrelated-then-sq-publish": "Write-Output \"a{b}tb\"\r\ngh release create v1 --notes 'safe {b}x{b}'",
+    "downstream-pipe-after-sq-publish": "gh release create v1 --notes 'safe {b}x{b}' | Select-String -Pattern \"{b}r\"",
+    "if-else-blocks-unrelated-backtick": (
+        "if ($true) { Write-Output \"a{b}tb\" } else { gh release create v1 --notes 'safe {b}x{b}' }"
+    ),
+    "unrelated-dq-here-string": "$other = @\"\na{b}tb\n\"@\ngh release create v1 --notes 'safe {b}x{b}'",
+    "unrelated-var-and-clean-ref-var": "$other = \"a{b}tb\"; $n = \"clean\"; gh release create v1 --notes $n",
+    "curly-single-quotes-notes": "Write-Output \"a{b}tb\"; gh release create v1 --notes \u2018use {b}x{b}\u2019",
+    "curly-sq-here-string-unrelated-tick": (
+        "Write-Output \"a{b}tb\"\n$n = @'\nuse {b}x{b}\n\u2019@\ngh release create v1 --notes $n"
+    ),
+    "notes-equals-single-quoted": "Write-Output \"a{b}tb\"; gh release create v1 --notes='use {b}x{b}'",
+    "and-chain-amend-no-edit": "git commit -q --amend --no-edit && Write-Output \"ok{b}n\"",
+    "tag-list-unrelated-after-semicolon": "git tag -l; git status -m; Write-Output \"a{b}tb\"",
+    "gh-api-read-piped-select-first": "gh api repos/o/r/releases | Select-Object -First 1; Write-Output \"a{b}tb\"",
+}
+
+NARROW_BOUNDARY_BLOCK = {
+    "two-publish-first-no-edit-second-bad": (
+        "git commit -q --amend --no-edit\ngh release create v1 --notes \"bad {b}x{b}\""
+    ),
+    "two-publish-first-sq-second-bad": (
+        "gh release create v1 --notes 'safe {b}x{b}'\ngit commit -m \"bad {b}y{b}\""
+    ),
+    "two-publish-second-file-flow": (
+        "Write-Output \"tab:{b}t|\"\ngh release create v1 --notes 'safe {b}x{b}'\ngit commit -F msg.txt"
+    ),
+    "amend-no-edit-overridden-by-m": "git commit -q --amend --no-edit -m \"bad {b}x{b}\"",
+    "amend-no-edit-overridden-by-F": "git commit -q --amend --no-edit -F msg.txt; Write-Output \"a{b}tb\"",
+    "amend-no-edit-overridden-by-e": "git commit -q --amend --no-edit -e; Write-Output \"a{b}tb\"",
+    "global-C-not-commit-reuse": "git -C D:/repo commit -m \"bad {b}x{b}\"",
+    "notes-equals-dq": "gh release create v1 --notes=\"use {b}x{b}\"",
+    "notes-equals-var-flow": "$n = \"use {b}x{b}\"; gh release create v1 --notes=$n",
+    "notes-file-equals-whole-command": "Write-Output \"a{b}tb\"; gh release create v1 --notes-file=notes.md",
+    "bundled-short-file-flag-attached": "Write-Output \"a{b}tb\"; gh release create v1 -dFnotes.md",
+    "body-equals-dq": "gh pr create --title=\"t\" --body=\"see {b}x{b}\"",
+    "var-chain-two-hops": "$a = \"use {b}x{b}\"; $b = $a; gh release create v1 --notes $b",
+    "multiline-assign-continuation": "$n =\n  \"use {b}x{b}\"\ngh release create v1 --notes $n",
+    "assign-from-if-block": "$n = if ($true) { \"use {b}x{b}\" } else { \"ok\" }; gh release create v1 --notes $n",
+    "assign-in-if-condition": "if ($n = \"use {b}x{b}\") { gh release create v1 --notes $n }",
+    "foreach-loop-var": "foreach ($n in @(\"use {b}x{b}\")) { gh release create v1 --notes $n }",
+    "pipe-into-foreach-psitem": "\"use {b}x{b}\" | ForEach-Object { gh release create v1 --notes $_ }",
+    "upstream-pipe-inline-notes": "Write-Output \"use {b}x{b}\" | gh release create v1 --notes 'safe'",
+    "multiline-upstream-pipe": "\"use {b}x{b}\" |\n  gh release create v1 -F -",
+    "set-variable-dynamic": "Set-Variable n \"use {b}x{b}\"; gh release create v1 --notes $n",
+    "function-param-flow": "function pub($m) { gh release create v1 --notes $m }; pub \"use {b}x{b}\"",
+    "splatting-fallback": "$p = @{ notes = \"use {b}x{b}\" }; gh release create v1 @p",
+    "scriptblock-create-indirect": "[scriptblock]::Create('gh release create v1 --notes \"use {b}x{b}\"').Invoke()",
+    "call-operator-string-fallback": "Write-Output \"a{b}tb\"; & \"gh.exe\" release create v1 --notes 'safe {b}x{b}'",
+    "curly-dq-notes-equals": "gh release create v1 --notes=\u201cuse {b}x{b}\u201d",
+    "curly-dq-here-string-var": "$n = @\"\nuse {b}x{b}\n\u201d@\ngh release create v1 --notes $n",
+    "subexpr-publish-inside-dq": "Write-Output \"res: $(gh release create v1 --notes \"use {b}x{b}\")\"",
+    "subexpr-publish-inside-here-dq": "Write-Output @\"\n$(gh release create v1 --notes \"use {b}x{b}\")\n\"@",
+    "unterminated-quote-fallback": "\"open; gh release create v1 --notes \"use {b}x{b} \"",
+    "unterminated-notes-dq": "gh release create v1 --notes \"use {b}x",
+    # Transitive special flow vars ($_, $PSItem, $args)
+    "transitive-foreach-underscore": "\"use {b}x{b} here\" | ForEach-Object { $n = $_; gh release create v1 --notes $n }",
+    "transitive-foreach-psitem": "\"use {b}x{b} here\" | ForEach-Object { $n = $PSItem; gh release create v1 --notes $n }",
+    "transitive-switch-underscore": "switch (\"use {b}x{b} here\") { default { $n = $_; gh release create v1 --notes $n } }",
+    "transitive-scriptblock-args": "& { $m = $args[0]; gh release create v1 --notes $m } \"use {b}x{b} here\"",
+    "transitive-foreach-two-hops": "\"use {b}x{b} here\" | ForEach-Object -Process { $a = $_; $b = $a; gh release create v1 --notes $b }",
+    # Multi-statement $(...) / @(...) subexpressions
+    "multi-stmt-dollar-paren": "$($n = \"use {b}x{b} here\"; gh release create v1 --notes $n)",
+    "multi-stmt-at-paren": "@($n = \"use {b}x{b} here\"; gh release create v1 --notes $n)",
+    "multi-stmt-dollar-paren-in-dq": "Write-Output \"$($n = \"use {b}x{b} here\"; gh release create v1 --notes $n)\"",
+    "multi-stmt-dollar-paren-two-hops": "$a = \"use {b}x{b} here\"; $($b = $a; gh release create v1 --notes $b)",
+    # $variable: drive prefix, braced vars, and word-operator line continuations (-f, -join)
+    "variable-drive-prefix": "$variable:n = \"use {b}x{b} here\"; gh release create v1 --notes $n",
+    "variable-drive-braced": "${variable:n} = \"use {b}x{b} here\"; gh release create v1 --notes $n",
+    "braced-var-assign-and-ref": "${n} = \"use {b}x{b} here\"; gh release create v1 --notes ${n}",
+    "format-op-line-continuation": "$n = \"clean {0}\" -f\n  \"use {b}x{b} here\"\ngh release create v1 --notes $n",
+    "format-op-trailing-space-continuation": "$n = \"clean {0}\" -f \n  \"use {b}x{b} here\"\ngh release create v1 --notes $n",
+    "format-op-comment-continuation": "$n = \"clean {0}\" -f # fmt\n  \"use {b}x{b} here\"\ngh release create v1 --notes $n",
+    "join-op-line-continuation": "$n = \"a\", \"b\" -join\n  \"use {b}x{b} here\"\ngh release create v1 --notes $n",
+    # Command-mode flags/tokens before newline or pwsh background '&' must not swallow next publish line
+    "git-tag-force-then-gh-release": "git tag v0.2.0 -f\ngh release create v0.2.0 --notes \"use {b}x{b} here\"",
+    "git-tag-contains-eq-then-gh-release": "git tag -l --contains=\ngh release create v1 --notes \"use {b}x{b} here\"",
+    "git-tag-plus-then-gh-release": "git tag -l v1+\ngh release create v1 --notes \"use {b}x{b} here\"",
+    "git-tag-pwsh-bg-amp-then-gh-release": "git tag -l & gh release create v1 --notes \"use {b}x{b} here\"",
+    "matches-automatic-var": "if (\"use {b}x{b} here\" -match \"(.*)\") { gh release create v1 --notes $Matches[1] }",
+    "assign-from-call-op-scriptblock": "$n = & { \"use {b}x{b} here\" }; gh release create v1 --notes $n",
+    "assign-from-call-op-cmdlet": "$n = & Write-Output \"use {b}x{b} here\"; gh release create v1 --notes $n",
+}
+
+
+class NarrowingTests(unittest.TestCase):
+    def test_twelve_narrowing_fixtures_match_target_verdicts(self):
+        for fid, should_block, template in NARROW_FIXTURES:
+            command = template.replace("{b}", BT)
+            with self.subTest(fixture=fid):
+                problem = g.find_problem(command)
+                if should_block:
+                    self.assertIsNotNone(problem, f"{fid} should block: {command}")
+                else:
+                    self.assertIsNone(problem, f"{fid} should pass: {command}")
+
+    def test_narrowing_boundary_passes(self):
+        for name, command in _cases(NARROW_BOUNDARY_PASS).items():
+            with self.subTest(case=name):
+                self.assertIsNone(g.find_problem(command), command)
+
+    def test_narrowing_boundary_blocks(self):
+        for name, command in _cases(NARROW_BOUNDARY_BLOCK).items():
+            with self.subTest(case=name):
+                self.assertIsNotNone(g.find_problem(command), command)
+
+    def test_scriptblock_create_sets_indirect_flag(self):
+        command = _cases(NARROW_BOUNDARY_BLOCK)["scriptblock-create-indirect"]
+        problem = g.find_problem(command)
+        self.assertIsNotNone(problem)
+        self.assertTrue(problem.indirect)
+        self.assertIn("Invoke-Expression", g.format_message(command, problem))
+
+
 class TimingLimitTests(unittest.TestCase):
     def test_scale_is_one_by_default_and_accepts_positive_factors(self):
         with mock.patch.dict(os.environ, {}, clear=True):
@@ -268,8 +467,14 @@ class SpeedTests(unittest.TestCase):
 
     def test_many_publish_words_without_text_stay_linear(self):
         # Each match used to scan the rest of the command: 16,000 'git tag;' took 13.5 s.
-        for text in ("git tag;" * 16000 + ' "' + BT + 'n"', "gh api x;" * 16000 + ' "' + BT + 'n"'):
-            with self.subTest(text=text[:12]):
+        cases = (
+            "git tag;" * 16000 + ' "' + BT + 'n"',
+            "gh api x;" * 16000 + ' "' + BT + 'n"',
+            "echo (" + "git tag " * 2000 + '); Write-Output "a' + BT + 'tb"',
+            "$x = 'ok'; " + "gh release create v1 --notes $x; " * 3000 + 'Write-Output "a' + BT + 'tb"',
+        )
+        for text in cases:
+            with self.subTest(text=text[:20]):
                 start = time.perf_counter()
                 g.find_problem(text)
                 self.assertLess(time.perf_counter() - start, timing_limit(2.0))

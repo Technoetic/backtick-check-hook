@@ -134,6 +134,13 @@ class InstalledClaudeTests(unittest.TestCase):
                     self.assertEqual(proc.returncode, expected, proc.stderr)
                     if expected:
                         self.assertIn(MARKER, proc.stderr.decode("utf-8"))
+        for name, cmd in [
+            ("amend-no-edit-with-tab", 'if ($false) { git commit -q --amend --no-edit }; "x`ty" | Out-Null'),
+            ("separate-stmt-tab-sq-gh", "\"tab:`t|\"\nif ($false) { gh release create v0.0.0 --notes 'use `x` here' }"),
+        ]:
+            with self.subTest(case=name):
+                proc = self.bash(line, encoded_command("PowerShell", cmd))
+                self.assertEqual(proc.returncode, 0, proc.stderr)
         (self.package / "scripts/ps_publish_guard.py").unlink()
         self.assertEqual(self.bash(line, encoded_command("PowerShell", PROBE)).returncode, 0)
 
@@ -397,7 +404,9 @@ class InstalledAgyTests(unittest.TestCase):
             cmd = os.environ["COMSPEC"]
             return ('"' + cmd + '" /d /s /c "' + line + '"', [cmd, "/d", "/s", "/c", line])
         for payload, deny in [(_make_payload(PROBE), True), (_make_payload('Write-Output "a`tb"'), False),
-                              (_make_payload("echo plain"), False), (_make_manage_task_payload("send_input", PROBE), True),
+                              (_make_payload("echo plain"), False),
+                              (_make_payload('if ($false) { git commit -q --amend --no-edit }; "x`ty" | Out-Null'), False),
+                              (_make_manage_task_payload("send_input", PROBE), True),
                               (_make_manage_task_payload("send_input", "y\n"), False)]:
             for cmd in launch(line):
                 with self.subTest(tool=payload["toolCall"]["name"], deny=deny, runner=type(cmd).__name__):
@@ -425,7 +434,8 @@ class InstalledCodexTests(unittest.TestCase):
         self.assertEqual(rule["timeout"], 30)
         if os.name == "nt":
             self.assertIn("-File", rule["command"])
-            for command, deny in [(PROBE, True), ('Write-Output "a`tb"', False), ("echo plain", False)]:
+            for command, deny in [(PROBE, True), ('Write-Output "a`tb"', False), ("echo plain", False),
+                                  ('if ($false) { git commit -q --amend --no-edit }; "x`ty" | Out-Null', False)]:
                 with self.subTest(command=command):
                     cmd = '"' + os.environ["COMSPEC"] + '" /d /s /c "' + rule["command"] + '"'
                     proc = h.run(cmd, encoded_command("Bash", command))
